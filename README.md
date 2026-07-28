@@ -17,9 +17,12 @@ voc-marketing-intelligence/
 │   ├── processed/           # pipeline outputs (gitignored)
 │   └── sample/               # bundled sample_reviews.csv for development
 ├── src/
-│   └── data/
-│       └── load_reviews.py  # Phase 0 loader
-├── notebooks/                # exploratory analysis
+│   ├── data/
+│   │   └── load_reviews.py  # Phase 0 loader
+│   └── preprocessing/
+│       └── clean_text.py    # Phase 1 two-track text cleaning
+├── notebooks/
+│   └── 01_eda.ipynb          # Phase 1 exploratory analysis
 ├── reports/                  # generated reports
 └── dashboard/                 # Phase 4 Streamlit app
 ```
@@ -48,12 +51,20 @@ Run the Phase 0 loader:
 python src/data/load_reviews.py
 ```
 
+Run the Phase 1 cleaning pipeline (writes `data/processed/reviews_clean.parquet`):
+
+```bash
+python src/preprocessing/clean_text.py
+```
+
+Then explore the output in `notebooks/01_eda.ipynb`.
+
 ## Roadmap
 
 | Phase | Focus |
 |-------|-------|
-| 0 | Setup — repo structure, environment, dataset loader, sample data |
-| 1 | Data pipeline — cleaning, normalization, exploratory analysis |
+| 0 | ✅ Setup — repo structure, environment, dataset loader, sample data |
+| 1 | ✅ Data pipeline — cleaning, normalization, exploratory analysis |
 | 2 | Sentiment analysis — rule-based and model-based scoring |
 | 3 | Aspect mining — topic modeling to surface complaint/praise themes |
 | 4 | Dashboard — interactive Streamlit app for exploring results |

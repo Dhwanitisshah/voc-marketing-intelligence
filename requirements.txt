@@ -3,6 +3,8 @@ pandas
 numpy
 matplotlib
 seaborn
+pyarrow
+wordcloud
 
 # --- Phase 1-2: sentiment analysis ---
 nltk
@@ -18,7 +20,6 @@ bertopic
 # --- Phase 4: dashboard ---
 streamlit
 plotly
-wordcloud
 
 # --- Phase 5: LLM marketing strategy layer ---
 anthropic
