@@ -21,11 +21,16 @@ voc-marketing-intelligence/
 │   │   └── load_reviews.py  # Phase 0 loader
 │   ├── preprocessing/
 │   │   └── clean_text.py    # Phase 1 two-track text cleaning
-│   └── sentiment/
-│       ├── vader_model.py       # Phase 2 lexicon baseline (VADER)
-│       ├── transformer_model.py # Phase 2 transformer model (RoBERTa)
-│       ├── run_sentiment.py     # Phase 2 orchestrator
-│       └── evaluate.py          # Phase 2 model comparison / evaluation
+│   ├── sentiment/
+│   │   ├── vader_model.py       # Phase 2 lexicon baseline (VADER)
+│   │   ├── transformer_model.py # Phase 2 transformer model (RoBERTa)
+│   │   ├── run_sentiment.py     # Phase 2 orchestrator
+│   │   └── evaluate.py          # Phase 2 model comparison / evaluation
+│   └── aspects/
+│       ├── aspect_lexicon.py    # Phase 3 editable seed keyword lexicon
+│       ├── aspect_tagger.py     # Phase 3 keyword aspect tagger (backbone)
+│       ├── topic_model.py       # Phase 3 BERTopic discovery layer
+│       └── run_aspects.py       # Phase 3 orchestrator
 ├── notebooks/
 │   └── 01_eda.ipynb          # Phase 1 exploratory analysis
 ├── reports/                  # generated reports
@@ -78,6 +83,16 @@ Then evaluate both models against rating-derived ground truth (writes
 python src/sentiment/evaluate.py
 ```
 
+Run the Phase 3 aspect mining pipeline (writes `data/processed/reviews_aspects.parquet`
+and `reports/aspect_summary.json`; use `--sample N` to dev on a subset). Below 50
+reviews BERTopic is skipped automatically and only keyword tagging runs:
+
+```bash
+python src/aspects/run_aspects.py
+```
+
+Edit `src/aspects/aspect_lexicon.py` to extend the seed keywords for your domain.
+
 ## Roadmap
 
 | Phase | Focus |
@@ -85,7 +100,7 @@ python src/sentiment/evaluate.py
 | 0 | ✅ Setup — repo structure, environment, dataset loader, sample data |
 | 1 | ✅ Data pipeline — cleaning, normalization, exploratory analysis |
 | 2 | ✅ Sentiment analysis — VADER lexicon baseline vs. RoBERTa transformer, evaluated against rating-derived ground truth |
-| 3 | Aspect mining — topic modeling to surface complaint/praise themes |
+| 3 | ✅ Aspect mining — keyword tagger backbone + BERTopic discovery layer, crossed with sentiment |
 | 4 | Dashboard — interactive Streamlit app for exploring results |
 | 5 | LLM strategy layer — Claude-generated marketing recommendations |
 | 6 | Report / paper — write-up of findings and methodology |

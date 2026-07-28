@@ -1,0 +1,68 @@
+{
+  "aspects": {
+    "delivery": {
+      "total": 5,
+      "positive": 2,
+      "neutral": 1,
+      "negative": 2,
+      "negative_share": 0.4,
+      "positive_share": 0.4
+    },
+    "price": {
+      "total": 3,
+      "positive": 2,
+      "neutral": 1,
+      "negative": 0,
+      "negative_share": 0.0,
+      "positive_share": 0.6667
+    },
+    "quality": {
+      "total": 6,
+      "positive": 2,
+      "neutral": 1,
+      "negative": 3,
+      "negative_share": 0.5,
+      "positive_share": 0.3333
+    },
+    "support": {
+      "total": 3,
+      "positive": 1,
+      "neutral": 0,
+      "negative": 2,
+      "negative_share": 0.6667,
+      "positive_share": 0.3333
+    },
+    "packaging": {
+      "total": 3,
+      "positive": 2,
+      "neutral": 0,
+      "negative": 1,
+      "negative_share": 0.3333,
+      "positive_share": 0.6667
+    },
+    "ux": {
+      "total": 4,
+      "positive": 2,
+      "neutral": 0,
+      "negative": 2,
+      "negative_share": 0.5,
+      "positive_share": 0.5
+    }
+  },
+  "top_complaints": [
+    "support",
+    "quality",
+    "ux",
+    "delivery",
+    "packaging",
+    "price"
+  ],
+  "top_praise": [
+    "price",
+    "packaging",
+    "ux",
+    "delivery",
+    "quality",
+    "support"
+  ]
+}
