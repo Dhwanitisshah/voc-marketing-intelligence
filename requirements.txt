@@ -11,10 +11,10 @@ nltk
 spacy
 scikit-learn
 vaderSentiment
-
-# --- Phase 2-3: aspect mining / topic modeling ---
 transformers
 torch
+
+# --- Phase 2-3: aspect mining / topic modeling ---
 bertopic
 
 # --- Phase 4: dashboard ---

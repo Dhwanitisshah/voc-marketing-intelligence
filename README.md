@@ -19,8 +19,13 @@ voc-marketing-intelligence/
 ├── src/
 │   ├── data/
 │   │   └── load_reviews.py  # Phase 0 loader
-│   └── preprocessing/
-│       └── clean_text.py    # Phase 1 two-track text cleaning
+│   ├── preprocessing/
+│   │   └── clean_text.py    # Phase 1 two-track text cleaning
+│   └── sentiment/
+│       ├── vader_model.py       # Phase 2 lexicon baseline (VADER)
+│       ├── transformer_model.py # Phase 2 transformer model (RoBERTa)
+│       ├── run_sentiment.py     # Phase 2 orchestrator
+│       └── evaluate.py          # Phase 2 model comparison / evaluation
 ├── notebooks/
 │   └── 01_eda.ipynb          # Phase 1 exploratory analysis
 ├── reports/                  # generated reports
@@ -59,13 +64,27 @@ python src/preprocessing/clean_text.py
 
 Then explore the output in `notebooks/01_eda.ipynb`.
 
+Run the Phase 2 sentiment pipeline (writes `data/processed/reviews_sentiment.parquet`;
+use `--sample N` to dev on a subset):
+
+```bash
+python src/sentiment/run_sentiment.py --sample 200
+```
+
+Then evaluate both models against rating-derived ground truth (writes
+`reports/sentiment_comparison.txt`):
+
+```bash
+python src/sentiment/evaluate.py
+```
+
 ## Roadmap
 
 | Phase | Focus |
 |-------|-------|
 | 0 | ✅ Setup — repo structure, environment, dataset loader, sample data |
 | 1 | ✅ Data pipeline — cleaning, normalization, exploratory analysis |
-| 2 | Sentiment analysis — rule-based and model-based scoring |
+| 2 | ✅ Sentiment analysis — VADER lexicon baseline vs. RoBERTa transformer, evaluated against rating-derived ground truth |
 | 3 | Aspect mining — topic modeling to surface complaint/praise themes |
 | 4 | Dashboard — interactive Streamlit app for exploring results |
 | 5 | LLM strategy layer — Claude-generated marketing recommendations |
