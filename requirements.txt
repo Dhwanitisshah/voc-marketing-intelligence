@@ -1,0 +1,25 @@
+# --- Phase 0-1: setup + data pipeline ---
+pandas
+numpy
+matplotlib
+seaborn
+
+# --- Phase 1-2: sentiment analysis ---
+nltk
+spacy
+scikit-learn
+vaderSentiment
+
+# --- Phase 2-3: aspect mining / topic modeling ---
+transformers
+torch
+bertopic
+
+# --- Phase 4: dashboard ---
+streamlit
+plotly
+wordcloud
+
+# --- Phase 5: LLM marketing strategy layer ---
+anthropic
+python-dotenv
