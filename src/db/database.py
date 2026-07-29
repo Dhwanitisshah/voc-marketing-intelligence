@@ -10,8 +10,10 @@ in `review_aspects` (for GROUP BY aggregation without exploding strings in
 Python on every query).
 """
 
+import json
 import sqlite3
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -65,6 +67,15 @@ def init_db():
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_review_aspects_dataset "
             "ON review_aspects (dataset_id)"
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS strategy (
+                dataset_id TEXT PRIMARY KEY,
+                strategy_json TEXT,
+                created_at TEXT
+            )
+            """
         )
         conn.commit()
     finally:
@@ -185,5 +196,54 @@ def sentiment_counts(dataset_id: str) -> dict:
             (dataset_id,),
         ).fetchall()
         return {sentiment: count for sentiment, count in rows}
+    finally:
+        conn.close()
+
+
+def negative_examples_for_aspect(dataset_id: str, aspect: str, limit: int = 3) -> list:
+    """A few representative negative review snippets tagged with `aspect`."""
+    conn = _connect()
+    try:
+        rows = conn.execute(
+            """
+            SELECT ar.review_text
+            FROM review_aspects ra
+            JOIN analyzed_reviews ar ON ar.id = ra.review_id
+            WHERE ra.dataset_id = ? AND ra.aspect = ? AND ra.sentiment = 'negative'
+            LIMIT ?
+            """,
+            (dataset_id, aspect, limit),
+        ).fetchall()
+        return [r[0] for r in rows if r[0]]
+    finally:
+        conn.close()
+
+
+def save_strategy(dataset_id: str, strategy_dict: dict):
+    conn = _connect()
+    try:
+        conn.execute(
+            """
+            INSERT INTO strategy (dataset_id, strategy_json, created_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(dataset_id) DO UPDATE SET
+                strategy_json = excluded.strategy_json,
+                created_at = excluded.created_at
+            """,
+            (dataset_id, json.dumps(strategy_dict), datetime.now(timezone.utc).isoformat()),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def load_strategy(dataset_id: str) -> dict | None:
+    conn = _connect()
+    try:
+        row = conn.execute(
+            "SELECT strategy_json FROM strategy WHERE dataset_id = ?",
+            (dataset_id,),
+        ).fetchone()
+        return json.loads(row[0]) if row else None
     finally:
         conn.close()

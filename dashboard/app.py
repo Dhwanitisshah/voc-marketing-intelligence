@@ -23,10 +23,39 @@ from src import pipeline
 from src.aspects.aspect_lexicon import ASPECT_KEYWORDS
 from src.db import database as db
 from src.sentiment.transformer_model import _get_pipeline as _load_transformer_pipeline
+from src.strategy.generate_strategy import generate_strategy
 
 st.set_page_config(page_title="VOC Marketing Intelligence", layout="wide")
 
 SENTIMENT_COLORS = {"positive": "#2E7D32", "neutral": "#9E9E9E", "negative": "#C62828"}
+PRIORITY_COLORS = {"high": "#C62828", "medium": "#F9A825", "low": "#2E7D32"}
+PRIORITY_ORDER = {"high": 0, "medium": 1, "low": 2}
+
+
+def render_strategy(strategy: dict):
+    if "raw" in strategy:
+        st.warning("Model response wasn't valid JSON — showing raw output.")
+        st.text(strategy["raw"])
+        return
+
+    st.markdown(f"**{strategy.get('executive_summary', '')}**")
+
+    recs = sorted(
+        strategy.get("recommendations", []),
+        key=lambda r: PRIORITY_ORDER.get(r.get("priority", "low"), 3),
+    )
+    for rec in recs:
+        priority = rec.get("priority", "low")
+        color = PRIORITY_COLORS.get(priority, "#9E9E9E")
+        with st.container(border=True):
+            st.markdown(
+                f"**{rec.get('aspect', '')}** "
+                f"<span style='background-color:{color};color:white;padding:2px 8px;"
+                f"border-radius:8px;font-size:0.75em;'>{priority.upper()}</span>",
+                unsafe_allow_html=True,
+            )
+            st.markdown(f"*Finding:* {rec.get('finding', '')}")
+            st.markdown(f"*Recommendation:* {rec.get('recommendation', '')}")
 
 
 @st.cache_resource(show_spinner="Loading sentiment model (first run only)...")
@@ -226,3 +255,26 @@ with st.container(border=True):
         hide_index=True,
         width="stretch",
     )
+
+# --- Marketing strategy (Phase 5 LLM layer) --------------------------------
+with st.container(border=True):
+    st.subheader("Marketing strategy")
+
+    cached_strategy = db.load_strategy(dataset_id)
+    button_label = "Regenerate marketing strategy" if cached_strategy else "Generate marketing strategy"
+
+    if st.button(button_label):
+        with st.spinner("Calling Gemini..."):
+            try:
+                strategy = generate_strategy(dataset_id)
+            except RuntimeError as e:
+                st.error(str(e))
+                strategy = None
+        if strategy is not None:
+            db.save_strategy(dataset_id, strategy)
+            cached_strategy = strategy
+
+    if cached_strategy:
+        render_strategy(cached_strategy)
+    else:
+        st.caption("No strategy generated yet for this dataset.")

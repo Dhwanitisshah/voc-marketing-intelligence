@@ -22,5 +22,5 @@ streamlit
 plotly
 
 # --- Phase 5: LLM marketing strategy layer ---
-anthropic
+google-genai
 python-dotenv

@@ -32,8 +32,10 @@ voc-marketing-intelligence/
 │       ├── topic_model.py       # Phase 3 BERTopic discovery layer
 │       └── run_aspects.py       # Phase 3 orchestrator
 │   ├── pipeline.py            # Phase 4 composed analyze() (clean -> sentiment -> aspects)
-│   └── db/
-│       └── database.py        # Phase 4 SQLite persistence (data/voc.db)
+│   ├── db/
+│   │   └── database.py        # Phase 4 SQLite persistence (data/voc.db) + Phase 5 strategy cache
+│   └── strategy/
+│       └── generate_strategy.py  # Phase 5 Gemini-backed marketing strategy layer
 ├── notebooks/
 │   └── 01_eda.ipynb          # Phase 1 exploratory analysis
 ├── reports/                  # generated reports
@@ -111,6 +113,32 @@ runs the transformer sentiment model over every row, so large files take a
 while the first time; reselecting the same dataset afterwards loads straight
 from SQLite instead of reprocessing.
 
+### Phase 5: marketing strategy layer
+
+Turns the aspect x sentiment analysis into an executive summary and
+prioritized marketing recommendations, using the free Google Gemini API. The
+LLM only ever reasons over aggregates and example snippets pulled from
+`data/voc.db` (via `src/db/database.py`) — it's instructed never to invent
+numbers.
+
+Setup:
+
+1. Get a free API key at [Google AI Studio](https://aistudio.google.com/apikey).
+2. Copy `.env.example` to `.env` and set `GEMINI_API_KEY=your_key_here`. `.env`
+   is gitignored so your key never gets committed.
+3. Install `google-genai` (already in `requirements.txt`).
+
+Run it standalone against every dataset already in `data/voc.db`:
+
+```bash
+python src/strategy/generate_strategy.py
+```
+
+Or click "Generate marketing strategy" in the dashboard's "Marketing
+strategy" section — it only calls the API on click, caches the result in
+SQLite (`strategy` table), and reloads the cached result on future visits
+until you click "Regenerate".
+
 ## Roadmap
 
 | Phase | Focus |
@@ -120,5 +148,5 @@ from SQLite instead of reprocessing.
 | 2 | ✅ Sentiment analysis — VADER lexicon baseline vs. RoBERTa transformer, evaluated against rating-derived ground truth |
 | 3 | ✅ Aspect mining — keyword tagger backbone + BERTopic discovery layer, crossed with sentiment |
 | 4 | ✅ Dashboard — interactive Streamlit app for exploring results |
-| 5 | LLM strategy layer — Claude-generated marketing recommendations |
+| 5 | ✅ LLM strategy layer — Gemini-generated marketing recommendations, cached in SQLite, surfaced in the dashboard |
 | 6 | Report / paper — write-up of findings and methodology |
