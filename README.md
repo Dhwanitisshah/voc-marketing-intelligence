@@ -1,152 +1,119 @@
-# VOC Marketing Intelligence
+# VoC Marketing Intelligence
 
-A Voice of Customer (VOC) analysis system that turns raw customer reviews into
-sentiment scores, aspect-level complaints and praise (delivery, price, quality,
-support, packaging, UI, etc.), and LLM-generated marketing strategy
-recommendations — built up in phases from a simple data pipeline to a full
-dashboard and report.
+**An end-to-end Voice-of-Customer analytics system that turns raw customer reviews into sentiment, aspect-level insight, and AI-generated marketing strategy.**
 
-## Structure
+Upload a CSV of customer reviews and get back a full marketing-intelligence readout: how customers feel, *what* they're talking about, the themes no one pre-defined, and a prioritized set of marketing recommendations written by an LLM and grounded strictly in the computed data.
+
+<!-- Add a dashboard screenshot here for instant impact:
+![Dashboard](docs/dashboard.png)
+-->
+
+---
+
+## Why it exists
+
+Businesses sit on tens of thousands of reviews and read almost none of them. Star ratings hide *why* customers feel the way they do, and even when a team finds a signal, turning it into action is a separate manual job. This system closes that loop — from raw reviews to a strategy a marketer can act on.
+
+## What it does
+
+- **Sentiment** — positive / neutral / negative on every review via a transformer model (`cardiffnlp/twitter-roberta-base-sentiment-latest`), benchmarked against a VADER lexicon baseline.
+- **Aspect mining** — tags what customers discuss (delivery, price, quality, support, packaging, UX) and crosses it with sentiment to surface top complaints and top praise.
+- **Topic discovery** — BERTopic surfaces themes no one hard-coded, exposing what a fixed lexicon misses.
+- **Interactive dashboard** — Streamlit app with sentiment breakdowns, aspect×sentiment charts, word clouds, a sentiment-over-time view, and a filterable review table.
+- **AI strategy layer** — an LLM (Google Gemini) reads the computed aggregates and writes an executive summary plus prioritized, **grounded** recommendations — every claim tied to a real number, no fabrication.
+
+## Key results
+
+Validated on the [Datafiniti Amazon Consumer Reviews](https://www.kaggle.com/datasets/datafiniti/consumer-reviews-of-amazon-products) dataset (34,659 cleaned reviews; 3,000-row analysis sample).
+
+| Metric | VADER (lexicon) | Transformer (RoBERTa) |
+|---|---|---|
+| Macro-F1 | 0.42 | **0.51** |
+| Negative-class recall | 0.36 | **0.74** |
+
+The dataset is ~94% positive, so headline accuracy is inflated for both models — the honest metrics are **macro-F1** and **negative-class recall**, where the transformer catches roughly **twice as many dissatisfied customers**.
+
+**Headline finding:** the six hand-built aspects were tuned for delivery/service language; on real electronics reviews, BERTopic discovered **31 themes** (battery life, screen/glare, apps, setup, streaming, Alexa…) the lexicon never captured — direct evidence that keyword lexicons don't transfer across domains, and that unsupervised topic modeling is what reveals the gap.
+
+## Architecture
+
+```
+Ingest -> Clean -> Sentiment -> Aspects -> Persist -> Strategize
+ CSV      dual-    VADER +      keyword    SQLite     Gemini
+ load     track    RoBERTa      + BERTopic  cache     (grounded)
+```
+
+The cleaning stage is **dual-track**: a *light* clean (URLs/HTML only, case and punctuation preserved) feeds the sentiment models, and a *deep* clean (lowercased, lemmatized, stop-words removed) feeds topic modeling and word clouds — because aggressive cleaning that helps topic mining actively hurts sentiment.
 
 ```
 voc-marketing-intelligence/
-├── config.py               # central paths + editable column mappings
-├── requirements.txt         # dependencies, grouped by phase
-├── data/
-│   ├── raw/                 # your real reviews.csv goes here (gitignored)
-│   ├── processed/           # pipeline outputs (gitignored)
-│   └── sample/               # bundled sample_reviews.csv for development
+├── config.py                 # central paths + column mappings
 ├── src/
-│   ├── data/
-│   │   └── load_reviews.py  # Phase 0 loader
-│   ├── preprocessing/
-│   │   └── clean_text.py    # Phase 1 two-track text cleaning
-│   ├── sentiment/
-│   │   ├── vader_model.py       # Phase 2 lexicon baseline (VADER)
-│   │   ├── transformer_model.py # Phase 2 transformer model (RoBERTa)
-│   │   ├── run_sentiment.py     # Phase 2 orchestrator
-│   │   └── evaluate.py          # Phase 2 model comparison / evaluation
-│   └── aspects/
-│       ├── aspect_lexicon.py    # Phase 3 editable seed keyword lexicon
-│       ├── aspect_tagger.py     # Phase 3 keyword aspect tagger (backbone)
-│       ├── topic_model.py       # Phase 3 BERTopic discovery layer
-│       └── run_aspects.py       # Phase 3 orchestrator
-│   ├── pipeline.py            # Phase 4 composed analyze() (clean -> sentiment -> aspects)
-│   ├── db/
-│   │   └── database.py        # Phase 4 SQLite persistence (data/voc.db) + Phase 5 strategy cache
-│   └── strategy/
-│       └── generate_strategy.py  # Phase 5 Gemini-backed marketing strategy layer
-├── notebooks/
-│   └── 01_eda.ipynb          # Phase 1 exploratory analysis
-├── reports/                  # generated reports
-└── dashboard/
-    └── app.py                 # Phase 4 Streamlit app
+│   ├── data/                 # CSV load + validation
+│   ├── preprocessing/        # dual-track text cleaning
+│   ├── sentiment/            # VADER, transformer, evaluation
+│   ├── aspects/              # keyword tagger + BERTopic
+│   ├── db/                   # SQLite persistence + strategy cache
+│   ├── strategy/             # Gemini grounded recommendations
+│   └── pipeline.py           # composed analyze() for the dashboard
+├── dashboard/app.py          # Streamlit app
+├── tests/                    # 31-test pytest suite
+└── reports/                  # generated results artifacts
 ```
 
-## Setup
+## Tech stack
+
+Python · spaCy · Hugging Face Transformers · scikit-learn · VADER · BERTopic · Streamlit · Plotly · SQLite · Google Gemini API · pytest
+
+## Getting started
 
 ```bash
-python -m venv venv
-source venv/bin/activate   # on Windows: venv\Scripts\activate
-pip install pandas
-```
+# 1. clone + create a virtual environment
+git clone https://github.com/Dhwanitisshah/voc-marketing-intelligence.git
+cd voc-marketing-intelligence
+python -m venv .venv
+.venv\Scripts\activate          # Windows  (source .venv/bin/activate on macOS/Linux)
 
-As later phases are implemented, install the rest of `requirements.txt`:
-
-```bash
+# 2. install
 pip install -r requirements.txt
+python -m spacy download en_core_web_sm
+
+# 3. (optional) add a Gemini key for the strategy layer
+echo GEMINI_API_KEY=your_key_here > .env
+
+# 4. run the dashboard
+streamlit run dashboard/app.py --server.fileWatcherType none
 ```
 
-To use your own data, drop a CSV at `data/raw/reviews.csv` with at least a
-`review_text` column (see `config.py` for column-name mappings). Without it,
-the loader falls back to the bundled sample dataset.
+Upload the bundled `data/sample/sample_reviews.csv` to see it work immediately, or drop your own CSV at `data/raw/reviews.csv` and point the column names in `config.py` at it.
 
-Run the Phase 0 loader:
+### Batch pipeline (CLI)
 
 ```bash
-python src/data/load_reviews.py
+python src/preprocessing/clean_text.py    # -> reviews_clean.parquet
+python src/sentiment/run_sentiment.py     # -> reviews_sentiment.parquet
+python src/sentiment/evaluate.py          # VADER vs transformer comparison
+python src/aspects/run_aspects.py         # keyword tags + BERTopic + aspect summary
 ```
 
-Run the Phase 1 cleaning pipeline (writes `data/processed/reviews_clean.parquet`):
+## Testing
 
 ```bash
-python src/preprocessing/clean_text.py
+pytest -m "not slow" -v     # fast suite (~10s)
+pytest -v                   # full suite (31 tests)
 ```
 
-Then explore the output in `notebooks/01_eda.ipynb`.
+The suite runs against an isolated temporary database and a mocked LLM — no live API calls, no pollution of your real data.
 
-Run the Phase 2 sentiment pipeline (writes `data/processed/reviews_sentiment.parquet`;
-use `--sample N` to dev on a subset):
+## Future scope
 
-```bash
-python src/sentiment/run_sentiment.py --sample 200
-```
+- **Aspect-based sentiment** — score sentiment *per aspect* rather than inheriting the whole review's sentiment.
+- **Adaptive lexicon** — auto-expand aspects from BERTopic's discovered topics to close the domain-coverage gap.
+- **Column auto-mapping** — detect the review/rating/date columns on upload so any CSV works without editing config.
+- **Multilingual support** — extend to non-English reviews for Indian and global markets.
+- **Live ingestion** — scrape/stream reviews for continuous monitoring instead of one-off uploads.
+- **Deploy & scale** — GPU batch scoring and hosted deployment for full-dataset (30k+) runs and multi-user access.
 
-Then evaluate both models against rating-derived ground truth (writes
-`reports/sentiment_comparison.txt`):
+## License
 
-```bash
-python src/sentiment/evaluate.py
-```
-
-Run the Phase 3 aspect mining pipeline (writes `data/processed/reviews_aspects.parquet`
-and `reports/aspect_summary.json`; use `--sample N` to dev on a subset). Below 50
-reviews BERTopic is skipped automatically and only keyword tagging runs:
-
-```bash
-python src/aspects/run_aspects.py
-```
-
-Edit `src/aspects/aspect_lexicon.py` to extend the seed keywords for your domain.
-
-Run the Phase 4 dashboard (composes Phases 1-3 via `src/pipeline.py`, persists
-analyzed datasets to `data/voc.db` via `src/db/database.py`):
-
-```bash
-streamlit run dashboard/app.py
-```
-
-Upload a CSV from the sidebar (or reload a dataset you've already analyzed) to
-explore sentiment/aspect breakdowns, top complaints/praise, a negative-review
-word cloud, and a filterable review table. The first analysis of a dataset
-runs the transformer sentiment model over every row, so large files take a
-while the first time; reselecting the same dataset afterwards loads straight
-from SQLite instead of reprocessing.
-
-### Phase 5: marketing strategy layer
-
-Turns the aspect x sentiment analysis into an executive summary and
-prioritized marketing recommendations, using the free Google Gemini API. The
-LLM only ever reasons over aggregates and example snippets pulled from
-`data/voc.db` (via `src/db/database.py`) — it's instructed never to invent
-numbers.
-
-Setup:
-
-1. Get a free API key at [Google AI Studio](https://aistudio.google.com/apikey).
-2. Copy `.env.example` to `.env` and set `GEMINI_API_KEY=your_key_here`. `.env`
-   is gitignored so your key never gets committed.
-3. Install `google-genai` (already in `requirements.txt`).
-
-Run it standalone against every dataset already in `data/voc.db`:
-
-```bash
-python src/strategy/generate_strategy.py
-```
-
-Or click "Generate marketing strategy" in the dashboard's "Marketing
-strategy" section — it only calls the API on click, caches the result in
-SQLite (`strategy` table), and reloads the cached result on future visits
-until you click "Regenerate".
-
-## Roadmap
-
-| Phase | Focus |
-|-------|-------|
-| 0 | ✅ Setup — repo structure, environment, dataset loader, sample data |
-| 1 | ✅ Data pipeline — cleaning, normalization, exploratory analysis |
-| 2 | ✅ Sentiment analysis — VADER lexicon baseline vs. RoBERTa transformer, evaluated against rating-derived ground truth |
-| 3 | ✅ Aspect mining — keyword tagger backbone + BERTopic discovery layer, crossed with sentiment |
-| 4 | ✅ Dashboard — interactive Streamlit app for exploring results |
-| 5 | ✅ LLM strategy layer — Gemini-generated marketing recommendations, cached in SQLite, surfaced in the dashboard |
-| 6 | Report / paper — write-up of findings and methodology |
+MIT
