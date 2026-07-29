@@ -2,49 +2,49 @@
 SENTIMENT MODEL COMPARISON
 ========================================================================
 
-Model agreement rate (VADER vs transformer): 80.0%
+Model agreement rate (VADER vs transformer): 88.4%
 
-Evaluated against rating_sentiment ground truth (n=15)
+Evaluated against rating_sentiment ground truth (n=2997)
 
 Metric                   VADER   Transformer
 --------------------------------------------
-Accuracy                 0.600         0.733
-Precision (macro)        0.431         0.683
-Recall (macro)           0.544         0.694
-F1 (macro)               0.481         0.667
+Accuracy                 0.874         0.890
+Precision (macro)        0.407         0.470
+Recall (macro)           0.472         0.621
+F1 (macro)               0.423         0.511
 
 ------------------------------------------------------------------------
 VADER classification report
 ------------------------------------------------------------------------
               precision    recall  f1-score   support
 
-    negative       0.67      0.80      0.73         5
-     neutral       0.00      0.00      0.00         4
-    positive       0.62      0.83      0.71         6
+    negative       0.14      0.36      0.20        58
+     neutral       0.13      0.14      0.13       133
+    positive       0.95      0.92      0.94      2806
 
-    accuracy                           0.60        15
-   macro avg       0.43      0.54      0.48        15
-weighted avg       0.47      0.60      0.53        15
+    accuracy                           0.87      2997
+   macro avg       0.41      0.47      0.42      2997
+weighted avg       0.90      0.87      0.89      2997
 
 VADER confusion matrix (rows=true, cols=pred; order=negative,neutral,positive)
-[[4 0 1]
- [2 0 2]
- [0 1 5]]
+[[  21    3   34]
+ [  24   18   91]
+ [ 106  120 2580]]
 
 ------------------------------------------------------------------------
 Transformer classification report
 ------------------------------------------------------------------------
               precision    recall  f1-score   support
 
-    negative       0.71      1.00      0.83         5
-     neutral       0.50      0.25      0.33         4
-    positive       0.83      0.83      0.83         6
+    negative       0.29      0.74      0.42        58
+     neutral       0.15      0.20      0.17       133
+    positive       0.97      0.93      0.95      2806
 
-    accuracy                           0.73        15
-   macro avg       0.68      0.69      0.67        15
-weighted avg       0.70      0.73      0.70        15
+    accuracy                           0.89      2997
+   macro avg       0.47      0.62      0.51      2997
+weighted avg       0.92      0.89      0.90      2997
 
 Transformer confusion matrix (rows=true, cols=pred; order=negative,neutral,positive)
-[[5 0 0]
- [2 1 1]
- [0 1 5]]
+[[  43    8    7]
+ [  40   26   67]
+ [  66  141 2599]]

@@ -1,68 +1,68 @@
 {
   "aspects": {
     "delivery": {
-      "total": 5,
-      "positive": 2,
-      "neutral": 1,
-      "negative": 2,
-      "negative_share": 0.4,
-      "positive_share": 0.4
+      "total": 45,
+      "positive": 39,
+      "neutral": 3,
+      "negative": 3,
+      "negative_share": 0.0667,
+      "positive_share": 0.8667
     },
     "price": {
-      "total": 3,
-      "positive": 2,
-      "neutral": 1,
-      "negative": 0,
-      "negative_share": 0.0,
-      "positive_share": 0.6667
+      "total": 547,
+      "positive": 488,
+      "neutral": 24,
+      "negative": 35,
+      "negative_share": 0.064,
+      "positive_share": 0.8921
     },
     "quality": {
-      "total": 6,
-      "positive": 2,
-      "neutral": 1,
-      "negative": 3,
-      "negative_share": 0.5,
-      "positive_share": 0.3333
+      "total": 196,
+      "positive": 180,
+      "neutral": 5,
+      "negative": 11,
+      "negative_share": 0.0561,
+      "positive_share": 0.9184
     },
     "support": {
-      "total": 3,
-      "positive": 1,
-      "neutral": 0,
-      "negative": 2,
-      "negative_share": 0.6667,
-      "positive_share": 0.3333
+      "total": 150,
+      "positive": 121,
+      "neutral": 9,
+      "negative": 20,
+      "negative_share": 0.1333,
+      "positive_share": 0.8067
     },
     "packaging": {
-      "total": 3,
-      "positive": 2,
-      "neutral": 0,
-      "negative": 1,
-      "negative_share": 0.3333,
-      "positive_share": 0.6667
+      "total": 78,
+      "positive": 65,
+      "neutral": 6,
+      "negative": 7,
+      "negative_share": 0.0897,
+      "positive_share": 0.8333
     },
     "ux": {
-      "total": 4,
-      "positive": 2,
-      "neutral": 0,
-      "negative": 2,
-      "negative_share": 0.5,
-      "positive_share": 0.5
+      "total": 755,
+      "positive": 678,
+      "neutral": 37,
+      "negative": 40,
+      "negative_share": 0.053,
+      "positive_share": 0.898
     }
   },
   "top_complaints": [
     "support",
-    "quality",
-    "ux",
-    "delivery",
     "packaging",
-    "price"
+    "delivery",
+    "price",
+    "quality",
+    "ux"
   ],
   "top_praise": [
-    "price",
-    "packaging",
-    "ux",
-    "delivery",
     "quality",
+    "ux",
+    "price",
+    "delivery",
+    "packaging",
     "support"
   ]
 }

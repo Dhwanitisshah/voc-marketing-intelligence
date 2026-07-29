@@ -9,6 +9,7 @@ binary fallback is "distilbert-base-uncased-finetuned-sst-2-english" (POSITIVE/
 NEGATIVE only, no neutral class) — swap MODEL_NAME below if needed.
 """
 
+from tqdm import tqdm
 from transformers import pipeline
 
 MODEL_NAME = "cardiffnlp/twitter-roberta-base-sentiment-latest"
@@ -50,8 +51,10 @@ def score_transformer(texts, batch_size=32):
     pipe = _get_pipeline()
 
     results = []
-    outputs = pipe(texts, batch_size=batch_size, truncation=True, max_length=256)
-    for out in outputs:
-        label = _LABEL_MAP.get(out["label"].lower(), out["label"].lower())
-        results.append((label, float(out["score"])))
+    for i in tqdm(range(0, len(texts), batch_size), desc="scoring reviews"):
+        batch = texts[i:i + batch_size]
+        outputs = pipe(batch, truncation=True, max_length=256)
+        for out in outputs:
+            label = _LABEL_MAP.get(out["label"].lower(), out["label"].lower())
+            results.append((label, float(out["score"])))
     return results
