@@ -98,9 +98,17 @@ if uploaded_file is not None:
         if db.dataset_exists(dataset_id):
             st.session_state["dataset_id"] = dataset_id
         else:
-            with st.spinner("Running sentiment + aspect analysis..."):
-                enriched_df = pipeline.analyze(raw_df)
-                db.save_analysis(enriched_df, dataset_id)
+            try:
+                with st.spinner("Running sentiment + aspect analysis..."):
+                    enriched_df = pipeline.analyze(raw_df)
+                    db.save_analysis(enriched_df, dataset_id)
+            except KeyError as e:
+                st.error(str(e))
+                st.caption(
+                    "Rename your CSV's text column to match, or update "
+                    "REVIEW_TEXT_COL in config.py."
+                )
+                st.stop()
             st.session_state["dataset_id"] = dataset_id
 elif selected_dataset != "-- select --":
     st.session_state["dataset_id"] = selected_dataset
