@@ -31,10 +31,14 @@ voc-marketing-intelligence/
 │       ├── aspect_tagger.py     # Phase 3 keyword aspect tagger (backbone)
 │       ├── topic_model.py       # Phase 3 BERTopic discovery layer
 │       └── run_aspects.py       # Phase 3 orchestrator
+│   ├── pipeline.py            # Phase 4 composed analyze() (clean -> sentiment -> aspects)
+│   └── db/
+│       └── database.py        # Phase 4 SQLite persistence (data/voc.db)
 ├── notebooks/
 │   └── 01_eda.ipynb          # Phase 1 exploratory analysis
 ├── reports/                  # generated reports
-└── dashboard/                 # Phase 4 Streamlit app
+└── dashboard/
+    └── app.py                 # Phase 4 Streamlit app
 ```
 
 ## Setup
@@ -93,6 +97,20 @@ python src/aspects/run_aspects.py
 
 Edit `src/aspects/aspect_lexicon.py` to extend the seed keywords for your domain.
 
+Run the Phase 4 dashboard (composes Phases 1-3 via `src/pipeline.py`, persists
+analyzed datasets to `data/voc.db` via `src/db/database.py`):
+
+```bash
+streamlit run dashboard/app.py
+```
+
+Upload a CSV from the sidebar (or reload a dataset you've already analyzed) to
+explore sentiment/aspect breakdowns, top complaints/praise, a negative-review
+word cloud, and a filterable review table. The first analysis of a dataset
+runs the transformer sentiment model over every row, so large files take a
+while the first time; reselecting the same dataset afterwards loads straight
+from SQLite instead of reprocessing.
+
 ## Roadmap
 
 | Phase | Focus |
@@ -101,6 +119,6 @@ Edit `src/aspects/aspect_lexicon.py` to extend the seed keywords for your domain
 | 1 | ✅ Data pipeline — cleaning, normalization, exploratory analysis |
 | 2 | ✅ Sentiment analysis — VADER lexicon baseline vs. RoBERTa transformer, evaluated against rating-derived ground truth |
 | 3 | ✅ Aspect mining — keyword tagger backbone + BERTopic discovery layer, crossed with sentiment |
-| 4 | Dashboard — interactive Streamlit app for exploring results |
+| 4 | ✅ Dashboard — interactive Streamlit app for exploring results |
 | 5 | LLM strategy layer — Claude-generated marketing recommendations |
 | 6 | Report / paper — write-up of findings and methodology |

@@ -18,5 +18,6 @@ env/
 # Data
 data/raw/
 data/processed/
+data/voc.db
 !data/raw/.gitkeep
 !data/processed/.gitkeep
