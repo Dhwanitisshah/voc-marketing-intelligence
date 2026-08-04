@@ -4,9 +4,7 @@
 
 Upload a CSV of customer reviews and get back a full marketing-intelligence readout: how customers feel, *what* they're talking about, the themes no one pre-defined, and a prioritized set of marketing recommendations written by an LLM and grounded strictly in the computed data.
 
-<!-- Add a dashboard screenshot here for instant impact:
 ![Dashboard](docs/dashboard.png)
--->
 
 ---
 
