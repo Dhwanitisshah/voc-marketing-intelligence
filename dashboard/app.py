@@ -70,6 +70,40 @@ def derive_dataset_id(filename: str, df: pd.DataFrame) -> str:
     return f"{stem}_{row_hash}"
 
 
+def guess_column(columns, keywords, prefer_all=None):
+    """Case-insensitive substring match against column names.
+
+    Returns the first column containing any keyword, preferring one that
+    contains every keyword in `prefer_all` if given.
+    """
+    lower = {c: c.lower() for c in columns}
+    if prefer_all:
+        for col, low in lower.items():
+            if all(k in low for k in prefer_all):
+                return col
+    for col, low in lower.items():
+        if any(k in low for k in keywords):
+            return col
+    return None
+
+
+def guess_review_text_column(df: pd.DataFrame) -> str | None:
+    keywords = ["review", "text", "comment", "content", "body"]
+    guess = guess_column(df.columns, keywords, prefer_all=["review", "text"])
+    if guess is not None:
+        return guess
+
+    # Fall back to the longest-average-length text (object dtype) column.
+    best_col, best_len = None, -1
+    for col in df.columns:
+        if df[col].dtype != object:
+            continue
+        avg_len = df[col].dropna().astype(str).str.len().mean()
+        if pd.notna(avg_len) and avg_len > best_len:
+            best_col, best_len = col, avg_len
+    return best_col
+
+
 db.init_db()
 load_models()
 
@@ -80,8 +114,9 @@ with st.sidebar:
     st.header("Data")
     uploaded_file = st.file_uploader("Upload a reviews CSV", type="csv")
     st.caption(
-        f"Needs a `{config.REVIEW_TEXT_COL}` column. First-time analysis of a "
-        "large file takes a while since the transformer model scores every row."
+        "Any review CSV works — map its columns below after upload. "
+        "First-time analysis of a large file takes a while since the "
+        "transformer model scores every row."
     )
 
     existing_datasets = db.list_datasets()
@@ -90,26 +125,71 @@ with st.sidebar:
         ["-- select --"] + existing_datasets,
     )
 
-if uploaded_file is not None:
-    raw_df = pd.read_csv(uploaded_file)
-    dataset_id = derive_dataset_id(uploaded_file.name, raw_df)
+    analyze_clicked = False
+    text_col = rating_col = date_col = None
 
-    if dataset_id != st.session_state.get("dataset_id"):
-        if db.dataset_exists(dataset_id):
-            st.session_state["dataset_id"] = dataset_id
-        else:
-            try:
-                with st.spinner("Running sentiment + aspect analysis..."):
-                    enriched_df = pipeline.analyze(raw_df)
-                    db.save_analysis(enriched_df, dataset_id)
-            except KeyError as e:
-                st.error(str(e))
-                st.caption(
-                    "Rename your CSV's text column to match, or update "
-                    "REVIEW_TEXT_COL in config.py."
-                )
-                st.stop()
-            st.session_state["dataset_id"] = dataset_id
+    if uploaded_file is not None:
+        raw_df = pd.read_csv(uploaded_file)
+        columns = list(raw_df.columns)
+
+        guessed_text = guess_review_text_column(raw_df)
+        guessed_rating = guess_column(columns, ["rating", "score", "stars", "star"])
+        guessed_date = guess_column(columns, ["date", "time"])
+
+        with st.expander("Map your columns", expanded=True):
+            text_col = st.selectbox(
+                "Review text column",
+                columns,
+                index=columns.index(guessed_text) if guessed_text in columns else 0,
+            )
+
+            rating_options = ["(none)"] + columns
+            rating_default = guessed_rating if guessed_rating in columns else "(none)"
+            rating_col = st.selectbox(
+                "Rating column (optional)",
+                rating_options,
+                index=rating_options.index(rating_default),
+            )
+
+            date_options = ["(none)"] + columns
+            date_default = guessed_date if guessed_date in columns else "(none)"
+            date_col = st.selectbox(
+                "Date column (optional)",
+                date_options,
+                index=date_options.index(date_default),
+            )
+
+            analyze_clicked = st.button("Analyze")
+
+if uploaded_file is not None and analyze_clicked:
+    if not text_col:
+        st.error("Select a review text column to continue.")
+        st.stop()
+
+    rename_map = {text_col: config.REVIEW_TEXT_COL}
+    if rating_col != "(none)":
+        rename_map[rating_col] = config.RATING_COL
+    if date_col != "(none)":
+        rename_map[date_col] = config.DATE_COL
+    mapped_df = raw_df.rename(columns=rename_map)
+
+    dataset_id = derive_dataset_id(uploaded_file.name, mapped_df)
+
+    if db.dataset_exists(dataset_id):
+        st.session_state["dataset_id"] = dataset_id
+    else:
+        try:
+            with st.spinner("Running sentiment + aspect analysis..."):
+                enriched_df = pipeline.analyze(mapped_df)
+                db.save_analysis(enriched_df, dataset_id)
+        except KeyError as e:
+            st.error(str(e))
+            st.caption(
+                "Rename your CSV's text column to match, or update "
+                "REVIEW_TEXT_COL in config.py."
+            )
+            st.stop()
+        st.session_state["dataset_id"] = dataset_id
 elif selected_dataset != "-- select --":
     st.session_state["dataset_id"] = selected_dataset
 
@@ -145,7 +225,7 @@ with col1:
             color="sentiment", color_discrete_map=SENTIMENT_COLORS,
         )
         fig.update_layout(margin=dict(t=10, b=10, l=10, r=10))
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
 aspect_summary = db.aspect_sentiment_summary(dataset_id)
 
@@ -167,7 +247,7 @@ with col2:
                 color_discrete_map=SENTIMENT_COLORS,
             )
             fig.update_layout(margin=dict(t=10, b=10, l=10, r=10), barmode="stack")
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
 
 # --- Top complaints / top praise -------------------------------------------
 col3, col4 = st.columns(2)
@@ -187,7 +267,7 @@ if not aspect_summary.empty:
                 color_discrete_sequence=[SENTIMENT_COLORS["negative"]],
             )
             fig.update_layout(xaxis_tickformat=".0%", margin=dict(t=10, b=10, l=10, r=10))
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
 
     with col4:
         with st.container(border=True):
@@ -198,7 +278,7 @@ if not aspect_summary.empty:
                 color_discrete_sequence=[SENTIMENT_COLORS["positive"]],
             )
             fig.update_layout(xaxis_tickformat=".0%", margin=dict(t=10, b=10, l=10, r=10))
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
 
 # --- Word cloud of negative reviews ----------------------------------------
 with st.container(border=True):
@@ -232,7 +312,7 @@ if df["review_date"].notna().any():
                 color_discrete_map=SENTIMENT_COLORS, markers=True,
             )
             fig.update_layout(margin=dict(t=10, b=10, l=10, r=10))
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
         else:
             st.caption("No parseable dates found.")
 
