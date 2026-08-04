@@ -21,3 +21,4 @@ data/processed/
 data/voc.db
 !data/raw/.gitkeep
 !data/processed/.gitkeep
+prep_data.py
