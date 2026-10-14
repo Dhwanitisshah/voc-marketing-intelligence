@@ -22,7 +22,12 @@ from dotenv import load_dotenv
 sys.path.append(str(Path(__file__).resolve().parents[2]))
 
 from src.db import database as db
-from src.insights.ranking import MIN_MENTIONS, negative_heavy_topics, rank_complaints
+from src.insights.ranking import (
+    MIN_MENTIONS,
+    describe_closeness,
+    negative_heavy_topics,
+    rank_complaints,
+)
 from src.strategy.validation import (
     StrategyValidationError,
     check_grounding,
@@ -61,6 +66,12 @@ Rules:
 - If the data is sparse or an aspect has few mentions, say so rather than overstating confidence.
 - Aspects are ranked by impact (the number of negative mentions), not by negative share, and the
   top_complaint_aspects list is already in that order. Treat it as the priority order.
+- "statistically_close_to" lists aspects whose negative-mention counts are within counting noise of
+  this one, so their relative order is not reliable. Never call such an aspect a clear top complaint or
+  say it clearly outranks the aspects it is close to; say they are statistically close. If "ranking_note"
+  is present, reflect it in the executive summary.
+- Aspect sentiment is measured on the sentence that mentions the aspect where possible, so a mention is
+  negative only when that mention is.
 - An aspect with "low_confidence": true has fewer mentions than the minimum sample size. Never give
   it "high" priority; state explicitly that the sample is too small to be conclusive.
 - "negative_heavy_topics" are themes discovered from the reviews that no keyword lexicon defined.
@@ -141,6 +152,7 @@ def build_context(dataset_id: str, max_aspects: int = 3, examples_per_aspect: in
 
     aspects = []
     top_complaint_aspects = []
+    ranking_note = None
     if not aspect_df.empty:
         ranked = rank_complaints(aspect_df)
         for _, row in ranked.iterrows():
@@ -154,10 +166,13 @@ def build_context(dataset_id: str, max_aspects: int = 3, examples_per_aspect: in
                     "negative_share": round(float(row["negative_share"]), 3),
                     "positive_share": round(float(row["positive_share"]), 3),
                     "impact": int(row["impact"]),
+                    "rank": int(row["rank"]),
+                    "statistically_close_to": list(row["close_to"]),
                     "low_confidence": bool(row["low_confidence"]),
                 }
             )
         top_complaint_aspects = ranked.head(max_aspects)["aspect"].tolist()
+        ranking_note = describe_closeness(ranked)
 
     examples = {}
     for aspect in top_complaint_aspects:
@@ -175,6 +190,7 @@ def build_context(dataset_id: str, max_aspects: int = 3, examples_per_aspect: in
         ),
         "aspect_breakdown": aspects,
         "top_complaint_aspects": top_complaint_aspects,
+        "ranking_note": ranking_note,
         "negative_heavy_topics": _negative_topic_aggregates(dataset_id, counts, total),
         "example_negative_reviews": examples,
     }

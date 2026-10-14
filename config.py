@@ -19,3 +19,13 @@ PROCESSED_DIR = PROJECT_ROOT / "data" / "processed"
 REVIEW_TEXT_COL = "review_text"
 RATING_COL = "rating"
 DATE_COL = "date"
+
+# --- Aspect sentiment ----------------------------------------------------
+# "sentence": score only the sentence containing the aspect keyword (lightweight
+#             aspect-based sentiment), with negation handling for positive keywords.
+# "review":   each aspect mention inherits the whole review's sentiment.
+# Datasets analysed under a different mode are rebuilt automatically when loaded.
+ASPECT_SENTIMENT_MODE = "sentence"
+# Also cut sentences at "but" / "however" / "although" / ";" and score only the
+# clause holding the keyword ("easy to set up, but the speaker is bad").
+ASPECT_SPLIT_CLAUSES = False

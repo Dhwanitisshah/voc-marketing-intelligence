@@ -61,3 +61,30 @@ def score_transformer(texts, batch_size=32, progress_callback=None):
         if progress_callback:
             progress_callback(len(results), len(texts))
     return results
+
+
+def score_probs(texts, batch_size=32, progress_callback=None):
+    """Class probabilities for each text: a list of {"negative": p, "neutral": p, "positive": p}.
+
+    Same model and truncation as score_transformer, but keeps the whole distribution
+    so several short texts (e.g. the sentences mentioning one aspect) can be averaged.
+    Texts are batched in order of length (so batches pad to similar lengths, which is
+    several times faster on CPU) and returned in the original order.
+    `progress_callback(done, total)` is called after each batch.
+    """
+    texts = [text if isinstance(text, str) and text.strip() else "" for text in texts]
+    pipe = _get_pipeline()
+
+    order = sorted(range(len(texts)), key=lambda i: len(texts[i]))
+    results = [None] * len(texts)
+    for lo in range(0, len(order), batch_size):
+        idx = order[lo:lo + batch_size]
+        outputs = pipe([texts[i] for i in idx], top_k=None, truncation=True, max_length=256)
+        for i, scores in zip(idx, outputs):
+            results[i] = {
+                _LABEL_MAP.get(sc["label"].lower(), sc["label"].lower()): float(sc["score"])
+                for sc in scores
+            }
+        if progress_callback:
+            progress_callback(min(lo + batch_size, len(order)), len(order))
+    return results

@@ -37,3 +37,8 @@ ASPECT_KEYWORDS = {
         "navigate", "easy", "confusing", "confuse",
     ],
 }
+
+# Keywords that are positive on their own. When one of these is negated ("not easy",
+# "no value", "not worth") the mention is a complaint, not praise. Keywords such as
+# "price" or "app" are neutral and are left to the sentiment model.
+POSITIVE_POLARITY_KEYWORDS = {"easy", "worth", "value", "helpful", "durable"}

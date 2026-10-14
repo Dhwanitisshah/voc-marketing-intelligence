@@ -8,9 +8,15 @@ whole review, not the aspect).
 
 Usage:
     python scripts/audit_aspect.py [--dataset ID] [--aspect ux] [--sample 20] [--seed 42] [--window 15]
+    python scripts/audit_aspect.py --export data/eval/aspect_audit.csv [--aspects ux price]
+
+--export writes EVERY negative mention of the given aspects to a CSV for labelling
+(draft_label / draft_reason / human_label are left empty). It refuses to overwrite
+an existing file unless --force is given, so a hand-labelled file is never lost.
 """
 
 import argparse
+import csv
 import random
 import re
 import sys
@@ -74,6 +80,39 @@ def keyword_window(text: str, keywords: set, nlp, window: int):
     return surface.strip(".,!?;:\"'()"), ("... " if lo else "") + " ".join(snippet) + (" ..." if hi < len(words) else "")
 
 
+EXPORT_COLUMNS = [
+    "review_id", "aspect", "keyword", "context_window", "full_review",
+    "draft_label", "draft_reason", "human_label",
+]
+
+
+def export_mentions(dataset_id: str, aspects: list, path: Path, nlp, window: int):
+    """Write all negative mentions of `aspects` to `path` (labels left blank)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    n = 0
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=EXPORT_COLUMNS)
+        writer.writeheader()
+        for aspect in aspects:
+            keywords = set(ASPECT_KEYWORDS[aspect])
+            for review_id, text, clean_deep, _rating, _aspects in negative_mentions(dataset_id, aspect):
+                _surface, snippet = keyword_window(text or "", keywords, nlp, window)
+                writer.writerow(
+                    {
+                        "review_id": review_id,
+                        "aspect": aspect,
+                        "keyword": "|".join(matched_keywords(clean_deep, keywords)),
+                        "context_window": snippet,
+                        "full_review": text,
+                        "draft_label": "",
+                        "draft_reason": "",
+                        "human_label": "",
+                    }
+                )
+                n += 1
+    return n
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--dataset", default="reviews_171e719d99")
@@ -81,6 +120,9 @@ def main():
     parser.add_argument("--sample", type=int, default=20)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--window", type=int, default=15, help="words kept on each side of the match")
+    parser.add_argument("--export", type=Path, help="write all negative mentions to this CSV and exit")
+    parser.add_argument("--aspects", nargs="+", default=["ux", "price"], choices=sorted(ASPECT_KEYWORDS))
+    parser.add_argument("--force", action="store_true", help="allow --export to overwrite an existing file")
     args = parser.parse_args()
 
     if hasattr(sys.stdout, "reconfigure"):
@@ -89,6 +131,14 @@ def main():
     import spacy
 
     nlp = spacy.load("en_core_web_sm", disable=["parser", "ner"])
+
+    if args.export:
+        if args.export.exists() and not args.force:
+            sys.exit(f"{args.export} already exists (it may hold human labels). Use --force to overwrite.")
+        n = export_mentions(args.dataset, args.aspects, args.export, nlp, args.window)
+        print(f"Wrote {n} negative mentions ({', '.join(args.aspects)}) to {args.export}")
+        return
+
     keywords = set(ASPECT_KEYWORDS[args.aspect])
 
     rows = negative_mentions(args.dataset, args.aspect)

@@ -104,3 +104,90 @@ def test_build_context_ranks_by_impact_and_flags_low_confidence(tmp_db, seed_rev
     assert by_aspect["delivery"]["negative_share"] == 0.6  # share still reported
     assert "low_confidence" in strategy_mod.SYSTEM_INSTRUCTION
     assert str(MIN_MENTIONS) in context["ranking_method"]
+
+
+# --- statistical closeness ---------------------------------------------------------------
+
+
+def test_counts_within_counting_noise_are_close():
+    from src.insights.ranking import counts_are_close
+
+    assert counts_are_close(40, 35) is True      # 5 <= sqrt(40) + sqrt(35)
+    assert counts_are_close(35, 20) is False     # 15 > 5.9 + 4.5
+    assert counts_are_close(100, 60) is False
+    assert counts_are_close(0, 0) is False       # nothing to compare
+
+
+def test_adjacent_close_aspects_are_flagged_both_ways():
+    df = _aspect_df([("ux", 755, 40), ("price", 547, 35), ("support", 150, 20)])
+
+    ranked = rank_complaints(df).set_index("aspect")
+
+    assert list(ranked["rank"]) == [1, 2, 3]
+    assert ranked.loc["ux", "close_to"] == ["price"]
+    assert ranked.loc["price", "close_to"] == ["ux"]        # 35 vs 20 is not close
+    assert ranked.loc["support", "close_to"] == []
+
+
+def test_low_confidence_tier_is_not_compared_with_well_supported_aspects():
+    # 25 mentions -> low confidence: ranked after "price" even though 20 vs 18 negatives are close.
+    df = _aspect_df([("price", 200, 18), ("packaging", 25, 20)])
+
+    ranked = rank_complaints(df).set_index("aspect")
+
+    assert ranked.loc["price", "close_to"] == [] and ranked.loc["packaging", "close_to"] == []
+
+
+def test_describe_closeness_names_the_pair_and_denies_a_clear_first():
+    from src.insights.ranking import describe_closeness
+
+    df = _aspect_df([("ux", 755, 40), ("price", 547, 35), ("support", 150, 5)])
+
+    note = describe_closeness(rank_complaints(df))
+
+    assert "ux and price (40 vs 35)" in note
+    assert "no clear #1" in note.lower()
+
+
+def test_describe_closeness_is_none_when_the_order_is_clear():
+    from src.insights.ranking import describe_closeness
+
+    df = _aspect_df([("ux", 755, 100), ("price", 547, 35), ("support", 150, 5)])
+
+    assert describe_closeness(rank_complaints(df)) is None
+
+
+def test_clear_second_place_gap_still_notes_closeness_without_denying_first():
+    from src.insights.ranking import describe_closeness
+
+    df = _aspect_df([("ux", 755, 100), ("price", 547, 36), ("support", 150, 35)])
+
+    note = describe_closeness(rank_complaints(df))
+
+    assert "price and support" in note and "no clear #1" not in note.lower()
+
+
+def test_strategy_context_exposes_closeness_to_the_model(tmp_db, seed_reviews):
+    seed_reviews(
+        "ds_close",
+        [
+            (["ux"], "negative", 40), (["ux"], "positive", 360),
+            (["price"], "negative", 35), (["price"], "positive", 365),
+            (["support"], "negative", 5), (["support"], "positive", 95),
+        ],
+    )
+
+    context = strategy_mod.build_context("ds_close")
+
+    by_aspect = {a["aspect"]: a for a in context["aspect_breakdown"]}
+    assert by_aspect["ux"]["statistically_close_to"] == ["price"]
+    assert by_aspect["ux"]["rank"] == 1
+    assert by_aspect["support"]["statistically_close_to"] == []
+    assert "no clear #1" in context["ranking_note"].lower()
+    assert "statistically_close_to" in strategy_mod.SYSTEM_INSTRUCTION
+
+
+def test_strategy_context_has_no_note_when_ranking_is_clear(tmp_db, seed_reviews):
+    seed_reviews("ds_clear", [(["ux"], "negative", 60), (["price"], "negative", 10), (["price"], "positive", 90)])
+
+    assert strategy_mod.build_context("ds_clear")["ranking_note"] is None

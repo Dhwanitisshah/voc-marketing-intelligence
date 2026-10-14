@@ -55,3 +55,18 @@ def test_rating_and_date_guesses():
     assert guess_column(columns, RATING_KEYWORDS) == "Star Rating"
     assert guess_column(columns, DATE_KEYWORDS) == "Posted Time"
     assert guess_column(["a", "b"], RATING_KEYWORDS) is None
+
+
+def test_same_file_with_a_different_mapping_gets_a_different_dataset_id():
+    from src.data.column_mapping import derive_dataset_id
+
+    df = _df(Reviewer=["user_1", "user_2"], **{"Customer Comment": [LONG, LONG]})
+    wrong = df.rename(columns={"Reviewer": "review_text"})
+    right = df.rename(columns={"Customer Comment": "review_text"})
+
+    id_wrong = derive_dataset_id("reviews.csv", wrong, {"Reviewer": "review_text"})
+    id_right = derive_dataset_id("reviews.csv", right, {"Customer Comment": "review_text"})
+
+    assert id_wrong != id_right
+    assert id_right == derive_dataset_id("reviews.csv", right, {"Customer Comment": "review_text"})  # stable
+    assert id_right.startswith("reviews_")

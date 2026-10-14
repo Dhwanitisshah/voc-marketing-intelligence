@@ -3,6 +3,9 @@
 The dashboard pre-selects these guesses; the user can still override them.
 """
 
+import hashlib
+from pathlib import Path
+
 import pandas as pd
 
 TEXT_KEYWORDS = ["review", "text", "comment", "content", "body", "feedback", "description"]
@@ -61,3 +64,15 @@ def guess_review_text_column(df: pd.DataFrame) -> str | None:
 
     both = [c for c in trusted if "review" in c.lower() and "text" in c.lower()]
     return max(both or trusted, key=lengths.get)
+
+
+def derive_dataset_id(filename: str, df: pd.DataFrame, rename_map: dict | None = None) -> str:
+    """Stable id for an uploaded file *as mapped*: file stem + hash of the values and the column mapping.
+
+    The mapping is part of the id on purpose. Hashing values alone gives the same id for the same
+    file whichever column is chosen as the review text, so re-uploading with a corrected mapping
+    would silently reload the earlier, wrongly-mapped analysis.
+    """
+    digest = hashlib.md5(pd.util.hash_pandas_object(df, index=False).values)
+    digest.update(repr(sorted((rename_map or {}).items())).encode("utf-8"))
+    return f"{Path(filename).stem}_{digest.hexdigest()[:10]}"

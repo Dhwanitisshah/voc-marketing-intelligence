@@ -17,6 +17,7 @@ sys.path.append(str(Path(__file__).resolve().parent.parent))
 import config
 from src.preprocessing.clean_text import preprocess
 from src.sentiment.transformer_model import score_transformer
+from src.aspects.aspect_sentiment import compute_aspect_details
 from src.aspects.aspect_tagger import tag_dataframe
 
 _nlp = None
@@ -31,9 +32,10 @@ def _get_nlp():
 
 # Share of the overall progress bar each stage owns: (start, end) fractions.
 STAGE_SPANS = {
-    "Cleaning text": (0.0, 0.10),
-    "Scoring sentiment": (0.10, 0.85),
-    "Tagging aspects": (0.85, 0.90),
+    "Cleaning text": (0.0, 0.08),
+    "Scoring sentiment": (0.08, 0.58),
+    "Tagging aspects": (0.58, 0.60),
+    "Scoring aspect sentences": (0.60, 0.90),
     "Saving results": (0.90, 1.0),
 }
 
@@ -42,8 +44,9 @@ def analyze(df: pd.DataFrame, progress_callback=None) -> pd.DataFrame:
     """Run the full clean -> sentiment -> aspect chain over a raw reviews df.
 
     `df` must contain config.REVIEW_TEXT_COL. Returns a new df with
-    clean_light, clean_deep, sentiment, confidence, aspects, and
-    aspect_<name> boolean columns added.
+    clean_light, clean_deep, sentiment, confidence, aspects, aspect_<name>
+    boolean columns, and aspect_details ({aspect: {sentiment, keyword, sentence,
+    negated}} per review, computed per config.ASPECT_SENTIMENT_MODE) added.
 
     `progress_callback(fraction, stage)`, if given, is called with the overall
     progress in [0, 1] and the current stage name from STAGE_SPANS (the caller
@@ -74,5 +77,11 @@ def analyze(df: pd.DataFrame, progress_callback=None) -> pd.DataFrame:
     report("Tagging aspects")
     df = tag_dataframe(df)
     report("Tagging aspects", 1.0)
+
+    report("Scoring aspect sentences")
+    df["aspect_details"] = compute_aspect_details(
+        df, config.ASPECT_SENTIMENT_MODE,
+        progress_callback=lambda fraction: report("Scoring aspect sentences", fraction),
+    )
 
     return df

@@ -25,8 +25,17 @@ import config
 DB_PATH = config.PROJECT_ROOT / "data" / "voc.db"
 
 
+_schema_ready = set()
+
+
 def _connect():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    path = str(DB_PATH)
+    if path not in _schema_ready:
+        # Bring a database created by an older version up to date before first use, so no
+        # caller (CLI, script, dashboard) can hit a missing table/column.
+        _schema_ready.add(path)
+        init_db()
     return sqlite3.connect(DB_PATH, check_same_thread=False)
 
 
@@ -67,6 +76,19 @@ def init_db():
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_review_aspects_dataset "
             "ON review_aspects (dataset_id)"
+        )
+        existing_aspect_cols = {r[1] for r in conn.execute("PRAGMA table_info(review_aspects)")}
+        for column, ddl in (("keyword", "TEXT"), ("sentence", "TEXT"), ("negated", "INTEGER DEFAULT 0")):
+            if column not in existing_aspect_cols:
+                conn.execute(f"ALTER TABLE review_aspects ADD COLUMN {column} {ddl}")
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS dataset_meta (
+                dataset_id TEXT PRIMARY KEY,
+                aspect_mode TEXT,
+                updated_at TEXT
+            )
+            """
         )
         conn.execute(
             """
@@ -136,13 +158,18 @@ def _none_if_missing(series: pd.Series) -> list:
     return series.astype(object).where(series.notna(), None).tolist()
 
 
-def save_analysis(df: pd.DataFrame, dataset_id: str, progress_callback=None):
+def save_analysis(df: pd.DataFrame, dataset_id: str, progress_callback=None, aspect_mode: str | None = None):
     """Write an enriched (post-pipeline.analyze) dataframe under `dataset_id`.
 
     Rows are inserted in batches with executemany. review ids are assigned up
     front (inside one write transaction) so review_aspects rows can reference
     them without a lastrowid round-trip per review. `progress_callback`, if
     given, is called as progress_callback(rows_saved, total_rows) after each batch.
+
+    If df has an `aspect_details` column ({aspect: {sentiment, keyword, sentence,
+    negated}} per row, from aspect_sentiment.compute_aspect_details) each aspect mention
+    is stored with its own sentiment; otherwise it inherits the review's. `aspect_mode`
+    records which mode produced them (default "review", matching rows without details).
     """
     n = len(df)
     texts = _none_if_missing(df[config.REVIEW_TEXT_COL])
@@ -150,6 +177,9 @@ def save_analysis(df: pd.DataFrame, dataset_id: str, progress_callback=None):
     sentiments = df["sentiment"].tolist()
     confidences = [float(c) for c in df["confidence"]]
     aspect_lists = [a if isinstance(a, list) else [] for a in df["aspects"]]
+    details = (
+        list(df["aspect_details"]) if "aspect_details" in df.columns else [{} for _ in range(n)]
+    )
     ratings = (
         _none_if_missing(df[config.RATING_COL]) if config.RATING_COL in df.columns else [None] * n
     )
@@ -181,15 +211,76 @@ def save_analysis(df: pd.DataFrame, dataset_id: str, progress_callback=None):
                 ],
             )
             conn.executemany(
-                "INSERT INTO review_aspects (dataset_id, review_id, aspect, sentiment) VALUES (?, ?, ?, ?)",
+                "INSERT INTO review_aspects "
+                "(dataset_id, review_id, aspect, sentiment, keyword, sentence, negated) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
                 [
-                    (dataset_id, start_id + i, aspect, sentiments[i])
+                    (
+                        dataset_id, start_id + i, aspect,
+                        details[i].get(aspect, {}).get("sentiment", sentiments[i]),
+                        details[i].get(aspect, {}).get("keyword"),
+                        details[i].get(aspect, {}).get("sentence"),
+                        int(details[i].get(aspect, {}).get("negated", False)),
+                    )
                     for i in range(lo, hi)
                     for aspect in aspect_lists[i]
                 ],
             )
             if progress_callback:
                 progress_callback(hi, n)
+        _set_aspect_mode(conn, dataset_id, aspect_mode or "review")
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def _set_aspect_mode(conn, dataset_id: str, mode: str):
+    conn.execute(
+        """
+        INSERT INTO dataset_meta (dataset_id, aspect_mode, updated_at) VALUES (?, ?, ?)
+        ON CONFLICT(dataset_id) DO UPDATE SET aspect_mode = excluded.aspect_mode,
+                                              updated_at = excluded.updated_at
+        """,
+        (dataset_id, mode, datetime.now(timezone.utc).isoformat()),
+    )
+
+
+def get_aspect_mode(dataset_id: str) -> str | None:
+    """Mode the dataset's aspect sentiment was computed under; None if the dataset doesn't exist.
+
+    Datasets saved before modes existed have no meta row and were review-level.
+    """
+    conn = _connect()
+    try:
+        row = conn.execute(
+            "SELECT aspect_mode FROM dataset_meta WHERE dataset_id = ?", (dataset_id,)
+        ).fetchone()
+    finally:
+        conn.close()
+    if row and row[0]:
+        return row[0]
+    return "review" if dataset_exists(dataset_id) else None
+
+
+def replace_review_aspects(dataset_id: str, rows: list, mode: str):
+    """Swap the dataset's aspect-mention rows for `rows` and record the mode (one transaction).
+
+    rows: (review_id, aspect, sentiment, keyword, sentence, negated) tuples.
+    """
+    conn = _connect()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute("DELETE FROM review_aspects WHERE dataset_id = ?", (dataset_id,))
+        conn.executemany(
+            "INSERT INTO review_aspects "
+            "(dataset_id, review_id, aspect, sentiment, keyword, sentence, negated) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            [(dataset_id, *row) for row in rows],
+        )
+        _set_aspect_mode(conn, dataset_id, mode)
         conn.commit()
     except BaseException:
         conn.rollback()
@@ -264,12 +355,13 @@ def sentiment_counts(dataset_id: str) -> dict:
 
 
 def negative_examples_for_aspect(dataset_id: str, aspect: str, limit: int = 3) -> list:
-    """A few representative negative review snippets tagged with `aspect`."""
+    """A few representative negative mention snippets for `aspect`: the evidence sentence in
+    sentence mode, otherwise the review text."""
     conn = _connect()
     try:
         rows = conn.execute(
             """
-            SELECT ar.review_text
+            SELECT COALESCE(ra.sentence, ar.review_text)
             FROM review_aspects ra
             JOIN analyzed_reviews ar ON ar.id = ra.review_id
             WHERE ra.dataset_id = ? AND ra.aspect = ? AND ra.sentiment = 'negative'

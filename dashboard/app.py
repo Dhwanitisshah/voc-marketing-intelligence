@@ -6,7 +6,6 @@ breakdowns. Re-selecting an already-analyzed dataset loads straight from
 SQLite instead of reprocessing.
 """
 
-import hashlib
 import sys
 from pathlib import Path
 
@@ -26,11 +25,19 @@ from src.aspects.topic_model import MIN_DOCS as MIN_TOPIC_DOCS, discover_topics
 from src.data.column_mapping import (
     DATE_KEYWORDS,
     RATING_KEYWORDS,
+    derive_dataset_id,
     guess_column,
     guess_review_text_column,
 )
 from src.db import database as db
-from src.insights.ranking import MIN_MENTIONS, negative_heavy_topics, rank_complaints
+from src.aspects.aspect_sentiment import rebuild_dataset_aspects
+from src.insights.guards import check_analysis
+from src.insights.ranking import (
+    MIN_MENTIONS,
+    describe_closeness,
+    negative_heavy_topics,
+    rank_complaints,
+)
 from src.insights.trends import MIN_WEEK_REVIEWS, weekly_sentiment
 from src.preprocessing.clean_text import light_clean
 from src.sentiment.transformer_model import _get_pipeline as _load_transformer_pipeline
@@ -107,12 +114,6 @@ def load_models():
     return _load_transformer_pipeline()
 
 
-def derive_dataset_id(filename: str, df: pd.DataFrame) -> str:
-    row_hash = hashlib.md5(pd.util.hash_pandas_object(df, index=False).values).hexdigest()[:10]
-    stem = Path(filename).stem
-    return f"{stem}_{row_hash}"
-
-
 db.init_db()
 load_models()
 
@@ -182,7 +183,7 @@ if uploaded_file is not None and analyze_clicked:
         rename_map[date_col] = config.DATE_COL
     mapped_df = raw_df.rename(columns=rename_map)
 
-    dataset_id = derive_dataset_id(uploaded_file.name, mapped_df)
+    dataset_id = derive_dataset_id(uploaded_file.name, mapped_df, rename_map)
 
     if db.dataset_exists(dataset_id):
         st.session_state["dataset_id"] = dataset_id
@@ -196,7 +197,7 @@ if uploaded_file is not None and analyze_clicked:
         try:
             enriched_df = pipeline.analyze(mapped_df, progress_callback=on_progress)
             db.save_analysis(
-                enriched_df, dataset_id,
+                enriched_df, dataset_id, aspect_mode=config.ASPECT_SENTIMENT_MODE,
                 progress_callback=lambda done, total: on_progress(
                     save_start + (save_end - save_start) * done / total, "Saving results"
                 ),
@@ -220,8 +221,26 @@ if not dataset_id:
     st.info("Upload a CSV or select a previously analyzed dataset from the sidebar to begin.")
     st.stop()
 
+if db.get_aspect_mode(dataset_id) != config.ASPECT_SENTIMENT_MODE:
+    # Cached aspect sentiment was computed under a different mode: rebuild it from the
+    # stored text (no need to re-run cleaning, review sentiment or topics).
+    rebuild_bar = st.progress(0.0, text="Rebuilding aspect sentiment...")
+    rebuild_dataset_aspects(
+        dataset_id,
+        config.ASPECT_SENTIMENT_MODE,
+        progress_callback=lambda fraction: rebuild_bar.progress(
+            min(fraction, 1.0), text=f"Rebuilding aspect sentiment ({config.ASPECT_SENTIMENT_MODE} mode)... {fraction:.0%}"
+        ),
+    )
+    rebuild_bar.empty()
+
 df = db.load_analysis(dataset_id)
-st.caption(f"Dataset: `{dataset_id}` · {len(df)} reviews")
+st.caption(
+    f"Dataset: `{dataset_id}` · {len(df)} reviews · "
+    f"aspect sentiment: {db.get_aspect_mode(dataset_id)}-level"
+)
+for guard_warning in check_analysis(df):
+    st.warning(guard_warning, icon=":material/warning:")
 
 # --- Headline metrics -----------------------------------------------------
 counts = db.sentiment_counts(dataset_id)
@@ -306,13 +325,22 @@ with tab_overview:
                     "Ranked by impact (negative mentions = mentions × negative share). "
                     f"Aspects under {MIN_MENTIONS} mentions are low confidence and ranked last."
                 )
+                closeness_note = describe_closeness(ranked)
+                if closeness_note:
+                    st.warning(closeness_note, icon=":material/balance:")
                 st.dataframe(
-                    top_complaints.rename(
+                    top_complaints.assign(
+                        close_to=lambda d: d["close_to"].map(", ".join)
+                    ).rename(
                         columns={
                             "total": "mentions", "negative": "negative mentions",
                             "negative_share": "negative share", "low_confidence": "low confidence",
+                            "close_to": "statistically close to",
                         }
-                    )[["aspect", "mentions", "negative mentions", "negative share", "low confidence"]],
+                    )[[
+                        "rank", "aspect", "mentions", "negative mentions", "negative share",
+                        "statistically close to", "low confidence",
+                    ]],
                     column_config={
                         "negative share": st.column_config.NumberColumn(format="percent"),
                     },
