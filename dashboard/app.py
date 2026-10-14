@@ -13,6 +13,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
 from wordcloud import WordCloud
 
@@ -21,7 +22,11 @@ sys.path.append(str(Path(__file__).resolve().parent.parent))
 import config
 from src import pipeline
 from src.aspects.aspect_lexicon import ASPECT_KEYWORDS
+from src.aspects.topic_model import MIN_DOCS as MIN_TOPIC_DOCS, discover_topics
 from src.db import database as db
+from src.insights.ranking import MIN_MENTIONS, negative_heavy_topics, rank_complaints
+from src.insights.trends import MIN_WEEK_REVIEWS, weekly_sentiment
+from src.preprocessing.clean_text import light_clean
 from src.sentiment.transformer_model import _get_pipeline as _load_transformer_pipeline
 from src.strategy.generate_strategy import generate_strategy
 
@@ -213,156 +218,306 @@ with st.container(horizontal=True):
     st.metric("Positive", f"{pct_positive:.1f}%", border=True)
     st.metric("Negative", f"{pct_negative:.1f}%", border=True)
 
-# --- Sentiment donut + aspect x sentiment stacked bar ----------------------
-col1, col2 = st.columns([1, 2])
+tab_overview, tab_topics = st.tabs(["Overview", "Discovered Topics"])
 
-with col1:
-    with st.container(border=True):
-        st.subheader("Sentiment breakdown")
-        donut_df = pd.DataFrame({"sentiment": list(counts.keys()), "count": list(counts.values())})
-        fig = px.pie(
-            donut_df, names="sentiment", values="count", hole=0.5,
-            color="sentiment", color_discrete_map=SENTIMENT_COLORS,
-        )
-        fig.update_layout(margin=dict(t=10, b=10, l=10, r=10))
-        st.plotly_chart(fig, width="stretch")
+with tab_overview:
+    # --- Sentiment donut + aspect x sentiment stacked bar ----------------------
+    col1, col2 = st.columns([1, 2])
 
-aspect_summary = db.aspect_sentiment_summary(dataset_id)
-
-with col2:
-    with st.container(border=True):
-        st.subheader("Aspect x sentiment")
-        if aspect_summary.empty:
-            st.caption("No aspects were detected in this dataset.")
-        else:
-            long_df = aspect_summary.melt(
-                id_vars=["aspect", "total"],
-                value_vars=["positive", "neutral", "negative"],
-                var_name="sentiment",
-                value_name="count",
-            )
-            fig = px.bar(
-                long_df.sort_values("total", ascending=True),
-                x="count", y="aspect", color="sentiment", orientation="h",
-                color_discrete_map=SENTIMENT_COLORS,
-            )
-            fig.update_layout(margin=dict(t=10, b=10, l=10, r=10), barmode="stack")
-            st.plotly_chart(fig, width="stretch")
-
-# --- Top complaints / top praise -------------------------------------------
-col3, col4 = st.columns(2)
-
-if not aspect_summary.empty:
-    aspect_summary = aspect_summary.assign(
-        negative_share=aspect_summary["negative"] / aspect_summary["total"],
-        positive_share=aspect_summary["positive"] / aspect_summary["total"],
-    )
-
-    with col3:
+    with col1:
         with st.container(border=True):
-            st.subheader("Top complaints")
-            top_complaints = aspect_summary.sort_values("negative_share", ascending=False).head(5)
-            fig = px.bar(
-                top_complaints, x="negative_share", y="aspect", orientation="h",
-                color_discrete_sequence=[SENTIMENT_COLORS["negative"]],
-            )
-            fig.update_layout(xaxis_tickformat=".0%", margin=dict(t=10, b=10, l=10, r=10))
-            st.plotly_chart(fig, width="stretch")
-
-    with col4:
-        with st.container(border=True):
-            st.subheader("Top praise")
-            top_praise = aspect_summary.sort_values("positive_share", ascending=False).head(5)
-            fig = px.bar(
-                top_praise, x="positive_share", y="aspect", orientation="h",
-                color_discrete_sequence=[SENTIMENT_COLORS["positive"]],
-            )
-            fig.update_layout(xaxis_tickformat=".0%", margin=dict(t=10, b=10, l=10, r=10))
-            st.plotly_chart(fig, width="stretch")
-
-# --- Word cloud of negative reviews ----------------------------------------
-with st.container(border=True):
-    st.subheader("Common words in negative reviews")
-    negative_text = " ".join(df.loc[df["sentiment"] == "negative", "clean_deep"].dropna())
-    if negative_text.strip():
-        wc = WordCloud(width=1200, height=400, background_color="white").generate(negative_text)
-        fig, ax = plt.subplots(figsize=(12, 4))
-        ax.imshow(wc, interpolation="bilinear")
-        ax.axis("off")
-        st.pyplot(fig)
-    else:
-        st.caption("No negative reviews to build a word cloud from.")
-
-# --- Sentiment over time (if a date column exists) --------------------------
-if df["review_date"].notna().any():
-    with st.container(border=True):
-        st.subheader("Sentiment over time")
-        time_df = df.copy()
-        time_df["review_date"] = pd.to_datetime(time_df["review_date"], errors="coerce")
-        time_df = time_df.dropna(subset=["review_date"])
-        if not time_df.empty:
-            daily = (
-                time_df.groupby([time_df["review_date"].dt.date, "sentiment"])
-                .size()
-                .reset_index(name="count")
-                .rename(columns={"review_date": "date"})
-            )
-            fig = px.line(
-                daily, x="date", y="count", color="sentiment",
-                color_discrete_map=SENTIMENT_COLORS, markers=True,
+            st.subheader("Sentiment breakdown")
+            donut_df = pd.DataFrame({"sentiment": list(counts.keys()), "count": list(counts.values())})
+            fig = px.pie(
+                donut_df, names="sentiment", values="count", hole=0.5,
+                color="sentiment", color_discrete_map=SENTIMENT_COLORS,
             )
             fig.update_layout(margin=dict(t=10, b=10, l=10, r=10))
             st.plotly_chart(fig, width="stretch")
+
+    aspect_summary = db.aspect_sentiment_summary(dataset_id)
+
+    with col2:
+        with st.container(border=True):
+            st.subheader("Aspect x sentiment")
+            if aspect_summary.empty:
+                st.caption("No aspects were detected in this dataset.")
+            else:
+                long_df = aspect_summary.melt(
+                    id_vars=["aspect", "total"],
+                    value_vars=["positive", "neutral", "negative"],
+                    var_name="sentiment",
+                    value_name="count",
+                )
+                fig = px.bar(
+                    long_df.sort_values("total", ascending=True),
+                    x="count", y="aspect", color="sentiment", orientation="h",
+                    color_discrete_map=SENTIMENT_COLORS,
+                )
+                fig.update_layout(margin=dict(t=10, b=10, l=10, r=10), barmode="stack")
+                st.plotly_chart(fig, width="stretch")
+
+    # --- Top complaints / top praise -------------------------------------------
+    col3, col4 = st.columns(2)
+
+    if not aspect_summary.empty:
+        # Same ranking as the strategy layer: impact = negative mentions, with
+        # low-sample aspects (< MIN_MENTIONS) flagged and sorted after the rest.
+        ranked = rank_complaints(aspect_summary)
+
+        with col3:
+            with st.container(border=True):
+                st.subheader("Top complaints")
+                top_complaints = ranked.head(5).assign(
+                    confidence=lambda d: d["low_confidence"].map(
+                        {False: "Well supported", True: f"Low confidence (<{MIN_MENTIONS} mentions)"}
+                    ),
+                    share_label=lambda d: d["negative_share"].map("{:.1%} negative".format),
+                )
+                fig = px.bar(
+                    top_complaints, x="impact", y="aspect", orientation="h",
+                    color="confidence", text="share_label",
+                    color_discrete_map={
+                        "Well supported": SENTIMENT_COLORS["negative"],
+                        f"Low confidence (<{MIN_MENTIONS} mentions)": "#E0A3A3",
+                    },
+                    labels={"impact": "Negative mentions (impact)", "aspect": "", "confidence": ""},
+                )
+                fig.update_yaxes(autorange="reversed")
+                fig.update_layout(margin=dict(t=10, b=10, l=10, r=10), legend_orientation="h")
+                st.plotly_chart(fig, width="stretch")
+                st.caption(
+                    "Ranked by impact (negative mentions = mentions × negative share). "
+                    f"Aspects under {MIN_MENTIONS} mentions are low confidence and ranked last."
+                )
+                st.dataframe(
+                    top_complaints.rename(
+                        columns={
+                            "total": "mentions", "negative": "negative mentions",
+                            "negative_share": "negative share", "low_confidence": "low confidence",
+                        }
+                    )[["aspect", "mentions", "negative mentions", "negative share", "low confidence"]],
+                    column_config={
+                        "negative share": st.column_config.NumberColumn(format="percent"),
+                    },
+                    hide_index=True,
+                    width="stretch",
+                )
+
+        with col4:
+            with st.container(border=True):
+                st.subheader("Top praise")
+                top_praise = ranked.sort_values("positive_share", ascending=False).head(5)
+                fig = px.bar(
+                    top_praise, x="positive_share", y="aspect", orientation="h",
+                    color_discrete_sequence=[SENTIMENT_COLORS["positive"]],
+                )
+                fig.update_layout(xaxis_tickformat=".0%", margin=dict(t=10, b=10, l=10, r=10))
+                st.plotly_chart(fig, width="stretch")
+
+    # --- Word cloud of negative reviews ----------------------------------------
+    with st.container(border=True):
+        st.subheader("Common words in negative reviews")
+        negative_text = " ".join(df.loc[df["sentiment"] == "negative", "clean_deep"].dropna())
+        if negative_text.strip():
+            wc = WordCloud(width=1200, height=400, background_color="white").generate(negative_text)
+            fig, ax = plt.subplots(figsize=(12, 4))
+            ax.imshow(wc, interpolation="bilinear")
+            ax.axis("off")
+            st.pyplot(fig)
         else:
+            st.caption("No negative reviews to build a word cloud from.")
+
+    # --- Sentiment over time (weekly, if a date column exists) -----------------
+    weekly = weekly_sentiment(df, min_reviews=MIN_WEEK_REVIEWS)
+    if not weekly.empty:
+        with st.container(border=True):
+            st.subheader("Sentiment over time (weekly)")
+            solid = weekly[~weekly["low_sample"]]
+            sparse = weekly[weekly["low_sample"]]
+
+            fig = go.Figure()
+            for column, name, color in [
+                ("pct_negative", "% negative", SENTIMENT_COLORS["negative"]),
+                ("net_sentiment", "Net sentiment (pos% − neg%)", "#1565C0"),
+            ]:
+                fig.add_trace(go.Scatter(
+                    x=solid["week"], y=solid[column], mode="lines+markers",
+                    name=name, line=dict(color=color),
+                ))
+                if not sparse.empty:
+                    fig.add_trace(go.Scatter(
+                        x=sparse["week"], y=sparse[column], mode="markers",
+                        name=f"{name} (<{MIN_WEEK_REVIEWS} reviews)",
+                        marker=dict(color="rgba(0,0,0,0)", line=dict(color=color, width=1.5), size=7),
+                        opacity=0.6,
+                    ))
+            fig.update_layout(
+                margin=dict(t=10, b=10, l=10, r=10),
+                yaxis_title="percentage points", xaxis_title="week starting",
+            )
+            st.plotly_chart(fig, width="stretch")
+            st.caption(
+                f"Hollow markers are weeks with fewer than {MIN_WEEK_REVIEWS} reviews "
+                f"({len(sparse)} of {len(weekly)} weeks) and are too noisy to read as a trend."
+            )
+    elif df["review_date"].notna().any():
+        with st.container(border=True):
+            st.subheader("Sentiment over time (weekly)")
             st.caption("No parseable dates found.")
 
-# --- Filterable review table -------------------------------------------------
-with st.container(border=True):
-    st.subheader("Reviews")
+    # --- Filterable review table -------------------------------------------------
+    with st.container(border=True):
+        st.subheader("Reviews")
 
-    filter_col1, filter_col2 = st.columns(2)
-    with filter_col1:
-        sentiment_filter = st.multiselect(
-            "Filter by sentiment", options=sorted(counts.keys()), default=[]
+        filter_col1, filter_col2 = st.columns(2)
+        with filter_col1:
+            sentiment_filter = st.multiselect(
+                "Filter by sentiment", options=sorted(counts.keys()), default=[]
+            )
+        with filter_col2:
+            aspect_filter = st.multiselect(
+                "Filter by aspect", options=sorted(ASPECT_KEYWORDS.keys()), default=[]
+            )
+
+        filtered = df
+        if sentiment_filter:
+            filtered = filtered[filtered["sentiment"].isin(sentiment_filter)]
+        if aspect_filter:
+            filtered = filtered[
+                filtered["aspects"].apply(lambda a: any(x in a for x in aspect_filter))
+            ]
+
+        st.dataframe(
+            filtered[["review_text", "sentiment", "confidence", "aspects", "rating", "review_date"]],
+            hide_index=True,
+            width="stretch",
         )
-    with filter_col2:
-        aspect_filter = st.multiselect(
-            "Filter by aspect", options=sorted(ASPECT_KEYWORDS.keys()), default=[]
-        )
 
-    filtered = df
-    if sentiment_filter:
-        filtered = filtered[filtered["sentiment"].isin(sentiment_filter)]
-    if aspect_filter:
-        filtered = filtered[
-            filtered["aspects"].apply(lambda a: any(x in a for x in aspect_filter))
-        ]
+    # --- Marketing strategy (Phase 5 LLM layer) --------------------------------
+    with st.container(border=True):
+        st.subheader("Marketing strategy")
 
-    st.dataframe(
-        filtered[["review_text", "sentiment", "confidence", "aspects", "rating", "review_date"]],
-        hide_index=True,
-        width="stretch",
+        if not db.topics_exist(dataset_id):
+            st.caption(
+                "Tip: run topic discovery on the Discovered Topics tab first to include "
+                "discovered themes in the strategy."
+            )
+
+        cached_strategy = db.load_strategy(dataset_id)
+        button_label = "Regenerate marketing strategy" if cached_strategy else "Generate marketing strategy"
+
+        if st.button(button_label):
+            with st.spinner("Calling Gemini..."):
+                try:
+                    strategy = generate_strategy(dataset_id)
+                except RuntimeError as e:
+                    st.error(str(e))
+                    strategy = None
+                except Exception as e:  # Gemini outage / rate limit / network error
+                    st.error(f"Gemini request failed: {e}")
+                    st.caption("Try again in a moment. Any previously generated strategy is shown below.")
+                    strategy = None
+            if strategy is not None:
+                db.save_strategy(dataset_id, strategy)
+                cached_strategy = strategy
+
+        if cached_strategy:
+            render_strategy(cached_strategy)
+        else:
+            st.caption("No strategy generated yet for this dataset.")
+
+
+# --- Discovered topics (BERTopic, optional) ---------------------------------
+with tab_topics:
+    st.caption(
+        "BERTopic clusters reviews into themes nobody hard-coded. It runs on demand "
+        "(not as part of the main analysis) and the result is cached per dataset."
     )
 
-# --- Marketing strategy (Phase 5 LLM layer) --------------------------------
-with st.container(border=True):
-    st.subheader("Marketing strategy")
+    n_reviews = len(df)
+    has_topics = db.topics_exist(dataset_id)
 
-    cached_strategy = db.load_strategy(dataset_id)
-    button_label = "Regenerate marketing strategy" if cached_strategy else "Generate marketing strategy"
-
-    if st.button(button_label):
-        with st.spinner("Calling Gemini..."):
-            try:
-                strategy = generate_strategy(dataset_id)
-            except RuntimeError as e:
-                st.error(str(e))
-                strategy = None
-        if strategy is not None:
-            db.save_strategy(dataset_id, strategy)
-            cached_strategy = strategy
-
-    if cached_strategy:
-        render_strategy(cached_strategy)
+    if n_reviews < MIN_TOPIC_DOCS:
+        st.info(
+            f"Topic discovery needs at least {MIN_TOPIC_DOCS} reviews; this dataset has {n_reviews}. "
+            "The keyword aspects on the Overview tab still apply."
+        )
     else:
-        st.caption("No strategy generated yet for this dataset.")
+        button_label = "Re-run topic discovery" if has_topics else "Discover topics"
+        if st.button(button_label, icon=":material/travel_explore:", key="discover_topics"):
+            with st.spinner(
+                f"Embedding and clustering {n_reviews:,} reviews — this can take a few minutes..."
+            ):
+                result = discover_topics([light_clean(t) for t in df["review_text"]])
+                db.save_topics(dataset_id, df["id"].tolist(), result)
+            has_topics = True
+
+    if has_topics:
+        topics_df = db.topic_sentiment_summary(dataset_id)
+        coverage = db.coverage_summary(dataset_id)
+
+        if topics_df.empty:
+            st.info("BERTopic didn't find any coherent topics in this dataset.")
+        else:
+            total_n = coverage["total"]
+            lexicon_pct = 100 * coverage["lexicon_matched"] / total_n
+            topic_pct = 100 * coverage["topic_matched"] / total_n
+
+            with st.container(border=True):
+                st.subheader("Coverage: fixed lexicon vs discovered topics")
+                with st.container(horizontal=True):
+                    st.metric(f"Matched by the {len(ASPECT_KEYWORDS)}-aspect lexicon", f"{lexicon_pct:.1f}%")
+                    st.metric(
+                        f"Assigned to one of {len(topics_df)} topics", f"{topic_pct:.1f}%",
+                        delta=f"{topic_pct - lexicon_pct:+.1f} pts vs lexicon",
+                    )
+                st.info(
+                    f"The hand-built lexicon recognises **{lexicon_pct:.0f}%** of reviews; "
+                    f"BERTopic assigns **{topic_pct:.0f}%** to a discovered theme. The remainder "
+                    "is vocabulary the lexicon was never taught for this domain."
+                )
+
+            with st.container(border=True):
+                st.subheader("Top topics by size")
+                top_topics = topics_df.head(15).assign(
+                    topic=lambda d: "#" + d["topic_id"].astype(str) + " " + d["label"]
+                )
+                fig = px.bar(
+                    top_topics, x="size", y="topic", orientation="h",
+                    labels={"size": "Reviews", "topic": ""},
+                )
+                fig.update_yaxes(autorange="reversed")
+                fig.update_layout(margin=dict(t=10, b=10, l=10, r=10))
+                st.plotly_chart(fig, width="stretch")
+
+            baseline_negative = counts.get("negative", 0) / total if total else 0.0
+            negative_heavy_ids = set(
+                negative_heavy_topics(topics_df, baseline_negative, limit=5)["topic_id"]
+            )
+            examples = db.topic_examples(dataset_id, per_topic=3)
+
+            with st.container(border=True):
+                st.subheader("All topics")
+                st.caption(
+                    ":material/warning: marks the 5 most negative-heavy topics — "
+                    "negative share above the dataset average, ranked by negative reviews. "
+                    "These are also passed to the strategy generator as aggregates."
+                )
+                for _, row in topics_df.iterrows():
+                    n = row["total"]
+                    flag = ":material/warning: " if row["topic_id"] in negative_heavy_ids else ""
+                    title = (
+                        f"{flag}#{row['topic_id']} · {row['label']} · {n:,} reviews · "
+                        f"{row['negative'] / n:.0%} negative"
+                    )
+                    with st.expander(title):
+                        st.markdown(f"**Keywords:** {', '.join(row['keywords'])}")
+                        st.markdown(
+                            f":green[Positive {row['positive'] / n:.0%}] · "
+                            f":gray[Neutral {row['neutral'] / n:.0%}] · "
+                            f":red[Negative {row['negative'] / n:.0%}]"
+                        )
+                        st.markdown("**Example reviews**")
+                        for text in examples.get(row["topic_id"], []):
+                            st.text(text[:300] + ("…" if len(text) > 300 else ""))

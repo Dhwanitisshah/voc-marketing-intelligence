@@ -77,6 +77,33 @@ def init_db():
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS topics (
+                dataset_id TEXT NOT NULL,
+                topic_id INTEGER NOT NULL,
+                label TEXT,
+                keywords TEXT,
+                size INTEGER,
+                created_at TEXT,
+                PRIMARY KEY (dataset_id, topic_id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS review_topics (
+                dataset_id TEXT NOT NULL,
+                review_id INTEGER NOT NULL,
+                topic_id INTEGER NOT NULL,
+                PRIMARY KEY (dataset_id, review_id)
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_review_topics_dataset_topic "
+            "ON review_topics (dataset_id, topic_id)"
+        )
         conn.commit()
     finally:
         conn.close()
@@ -245,5 +272,152 @@ def load_strategy(dataset_id: str) -> dict | None:
             (dataset_id,),
         ).fetchone()
         return json.loads(row[0]) if row else None
+    finally:
+        conn.close()
+
+
+# --- Discovered topics (BERTopic cache) -------------------------------------
+
+OUTLIER_TOPIC = -1
+
+
+def save_topics(dataset_id: str, review_ids: list, result: dict):
+    """Replace the cached topics for `dataset_id`.
+
+    `review_ids` are analyzed_reviews.id values, aligned with
+    result["assignments"] (as returned by topic_model.discover_topics).
+    """
+    now = datetime.now(timezone.utc).isoformat()
+    conn = _connect()
+    try:
+        conn.execute("DELETE FROM topics WHERE dataset_id = ?", (dataset_id,))
+        conn.execute("DELETE FROM review_topics WHERE dataset_id = ?", (dataset_id,))
+        conn.executemany(
+            "INSERT INTO topics (dataset_id, topic_id, label, keywords, size, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            [
+                (dataset_id, t["topic_id"], t["label"], json.dumps(t["keywords"]), t["size"], now)
+                for t in result["topics"]
+            ],
+        )
+        conn.executemany(
+            "INSERT INTO review_topics (dataset_id, review_id, topic_id) VALUES (?, ?, ?)",
+            [
+                (dataset_id, int(review_id), int(topic_id))
+                for review_id, topic_id in zip(review_ids, result["assignments"])
+            ],
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def topics_exist(dataset_id: str) -> bool:
+    """True once topic discovery has been run for this dataset (even if it found no topics)."""
+    conn = _connect()
+    try:
+        row = conn.execute(
+            "SELECT 1 FROM review_topics WHERE dataset_id = ? LIMIT 1", (dataset_id,)
+        ).fetchone()
+        return row is not None
+    finally:
+        conn.close()
+
+
+def load_topics(dataset_id: str) -> pd.DataFrame:
+    """Cached topics (topic_id, label, keywords list, size), largest first."""
+    conn = _connect()
+    try:
+        df = pd.read_sql_query(
+            "SELECT topic_id, label, keywords, size FROM topics "
+            "WHERE dataset_id = ? ORDER BY size DESC, topic_id",
+            conn,
+            params=(dataset_id,),
+        )
+        df["keywords"] = df["keywords"].apply(lambda s: json.loads(s) if s else [])
+        return df
+    finally:
+        conn.close()
+
+
+def topic_sentiment_summary(dataset_id: str) -> pd.DataFrame:
+    """Per-topic positive/neutral/negative counts, joined with label/keywords/size."""
+    conn = _connect()
+    try:
+        df = pd.read_sql_query(
+            """
+            SELECT
+                t.topic_id, t.label, t.keywords, t.size,
+                COUNT(*) AS total,
+                SUM(CASE WHEN ar.sentiment = 'positive' THEN 1 ELSE 0 END) AS positive,
+                SUM(CASE WHEN ar.sentiment = 'neutral' THEN 1 ELSE 0 END) AS neutral,
+                SUM(CASE WHEN ar.sentiment = 'negative' THEN 1 ELSE 0 END) AS negative
+            FROM review_topics rt
+            JOIN topics t ON t.dataset_id = rt.dataset_id AND t.topic_id = rt.topic_id
+            JOIN analyzed_reviews ar ON ar.id = rt.review_id
+            WHERE rt.dataset_id = ?
+            GROUP BY t.topic_id, t.label, t.keywords, t.size
+            ORDER BY t.size DESC, t.topic_id
+            """,
+            conn,
+            params=(dataset_id,),
+        )
+        df["keywords"] = df["keywords"].apply(lambda s: json.loads(s) if s else [])
+        return df
+    finally:
+        conn.close()
+
+
+def topic_examples(dataset_id: str, per_topic: int = 3) -> dict:
+    """{topic_id: [up to `per_topic` review texts]}, highest sentiment-confidence first."""
+    conn = _connect()
+    try:
+        rows = conn.execute(
+            """
+            SELECT topic_id, review_text FROM (
+                SELECT rt.topic_id, ar.review_text,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY rt.topic_id ORDER BY ar.confidence DESC, ar.id
+                       ) AS rn
+                FROM review_topics rt
+                JOIN analyzed_reviews ar ON ar.id = rt.review_id
+                WHERE rt.dataset_id = ? AND rt.topic_id != ? AND ar.review_text IS NOT NULL
+            )
+            WHERE rn <= ?
+            ORDER BY topic_id, rn
+            """,
+            (dataset_id, OUTLIER_TOPIC, per_topic),
+        ).fetchall()
+        examples = {}
+        for topic_id, text in rows:
+            examples.setdefault(topic_id, []).append(text)
+        return examples
+    finally:
+        conn.close()
+
+
+def coverage_summary(dataset_id: str) -> dict:
+    """How many reviews the 6-aspect lexicon matched vs how many got a non-outlier topic.
+
+    topic_matched is None when topic discovery hasn't been run for the dataset.
+    """
+    conn = _connect()
+    try:
+        total, lexicon_matched = conn.execute(
+            "SELECT COUNT(*), SUM(CASE WHEN aspects IS NOT NULL AND aspects != '' THEN 1 ELSE 0 END) "
+            "FROM analyzed_reviews WHERE dataset_id = ?",
+            (dataset_id,),
+        ).fetchone()
+        topic_matched = None
+        if topics_exist(dataset_id):
+            topic_matched = conn.execute(
+                "SELECT COUNT(*) FROM review_topics WHERE dataset_id = ? AND topic_id != ?",
+                (dataset_id, OUTLIER_TOPIC),
+            ).fetchone()[0]
+        return {
+            "total": total or 0,
+            "lexicon_matched": lexicon_matched or 0,
+            "topic_matched": topic_matched,
+        }
     finally:
         conn.close()

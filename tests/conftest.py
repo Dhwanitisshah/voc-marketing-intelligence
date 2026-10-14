@@ -106,3 +106,32 @@ def mock_llm(monkeypatch):
 
     monkeypatch.setattr(strategy_mod, "call_llm", _fake_call_llm)
     return CANNED_STRATEGY_JSON
+
+
+@pytest.fixture
+def seed_reviews(tmp_db):
+    """Insert synthetic analyzed reviews without spaCy or the transformer.
+
+    `spec` is a list of (aspects, sentiment, count) tuples; returns the dataset's
+    analyzed_reviews.id values in insertion order.
+    """
+
+    def _seed(dataset_id, spec):
+        rows = []
+        for aspects, sentiment, count in spec:
+            for i in range(count):
+                rows.append(
+                    {
+                        "review_text": f"{sentiment} review about {' '.join(aspects) or 'nothing'} #{i}",
+                        "clean_deep": " ".join(aspects),
+                        "sentiment": sentiment,
+                        "confidence": 0.9 - i * 0.001,
+                        "aspects": list(aspects),
+                        "rating": 3,
+                        "date": "2026-01-05",
+                    }
+                )
+        db.save_analysis(pd.DataFrame(rows), dataset_id)
+        return db.load_analysis(dataset_id)["id"].tolist()
+
+    return _seed

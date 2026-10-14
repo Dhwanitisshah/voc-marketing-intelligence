@@ -21,6 +21,7 @@ import os
 sys.path.append(str(Path(__file__).resolve().parents[2]))
 
 from src.db import database as db
+from src.insights.ranking import MIN_MENTIONS, negative_heavy_topics, rank_complaints
 
 load_dotenv()
 
@@ -34,7 +35,7 @@ MODEL_NAME = "gemini-flash-latest"
 
 SYSTEM_INSTRUCTION = """You are a marketing research analyst producing an executive brief from
 customer review analytics. You will be given aggregate sentiment counts, per-aspect sentiment
-breakdowns, and a handful of representative negative review snippets.
+breakdowns, discovered topic aggregates, and a handful of representative negative review snippets.
 
 Rules:
 - Every claim you make MUST be grounded strictly in the provided data. Cite the specific
@@ -42,6 +43,13 @@ Rules:
   shipping were negative").
 - Do NOT fabricate, estimate, or round statistics that were not given to you.
 - If the data is sparse or an aspect has few mentions, say so rather than overstating confidence.
+- Aspects are ranked by impact (the number of negative mentions), not by negative share, and the
+  top_complaint_aspects list is already in that order. Treat it as the priority order.
+- An aspect with "low_confidence": true has fewer mentions than the minimum sample size. Never give
+  it "high" priority; state explicitly that the sample is too small to be conclusive.
+- "negative_heavy_topics" are themes discovered from the reviews that no keyword lexicon defined.
+  They carry aggregates only. Use them to point at complaint themes the aspect list misses, but do not
+  invent review content for them beyond their keywords and counts.
 - Respond with clean JSON only, matching the requested schema exactly."""
 
 JSON_SCHEMA_HINT = """Respond with JSON matching exactly this schema:
@@ -94,11 +102,8 @@ def build_context(dataset_id: str, max_aspects: int = 3, examples_per_aspect: in
     aspects = []
     top_complaint_aspects = []
     if not aspect_df.empty:
-        aspect_df = aspect_df.assign(
-            negative_share=aspect_df["negative"] / aspect_df["total"],
-            positive_share=aspect_df["positive"] / aspect_df["total"],
-        )
-        for _, row in aspect_df.iterrows():
+        ranked = rank_complaints(aspect_df)
+        for _, row in ranked.iterrows():
             aspects.append(
                 {
                     "aspect": row["aspect"],
@@ -108,13 +113,11 @@ def build_context(dataset_id: str, max_aspects: int = 3, examples_per_aspect: in
                     "negative": int(row["negative"]),
                     "negative_share": round(float(row["negative_share"]), 3),
                     "positive_share": round(float(row["positive_share"]), 3),
+                    "impact": int(row["impact"]),
+                    "low_confidence": bool(row["low_confidence"]),
                 }
             )
-        top_complaint_aspects = (
-            aspect_df.sort_values("negative_share", ascending=False)
-            .head(max_aspects)["aspect"]
-            .tolist()
-        )
+        top_complaint_aspects = ranked.head(max_aspects)["aspect"].tolist()
 
     examples = {}
     for aspect in top_complaint_aspects:
@@ -126,10 +129,37 @@ def build_context(dataset_id: str, max_aspects: int = 3, examples_per_aspect: in
         "dataset_id": dataset_id,
         "total_reviews": total,
         "sentiment_counts": counts,
+        "ranking_method": (
+            "aspects ranked by impact = negative mention count; aspects with fewer than "
+            f"{MIN_MENTIONS} mentions are flagged low_confidence and ranked after the rest"
+        ),
         "aspect_breakdown": aspects,
         "top_complaint_aspects": top_complaint_aspects,
+        "negative_heavy_topics": _negative_topic_aggregates(dataset_id, counts, total),
         "example_negative_reviews": examples,
     }
+
+
+def _negative_topic_aggregates(dataset_id: str, counts: dict, total: int, limit: int = 5) -> list:
+    """Aggregates (no review text) for the topics most over-indexed on negative sentiment.
+
+    Empty when topic discovery hasn't been run for the dataset.
+    """
+    if not total or not db.topics_exist(dataset_id):
+        return []
+
+    baseline = counts.get("negative", 0) / total
+    heavy = negative_heavy_topics(db.topic_sentiment_summary(dataset_id), baseline, limit=limit)
+    return [
+        {
+            "topic": row["label"],
+            "keywords": list(row["keywords"]),
+            "size": int(row["total"]),
+            "negative": int(row["negative"]),
+            "negative_share": round(float(row["negative_share"]), 3),
+        }
+        for _, row in heavy.iterrows()
+    ]
 
 
 def _strip_json_fences(text: str) -> str:
