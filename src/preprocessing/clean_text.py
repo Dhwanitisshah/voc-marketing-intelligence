@@ -15,7 +15,6 @@ import unicodedata
 from pathlib import Path
 
 import pandas as pd
-import spacy
 
 sys.path.append(str(Path(__file__).resolve().parents[2]))
 
@@ -72,6 +71,8 @@ def _deep_clean_batch(texts, nlp) -> list:
 def preprocess(df: pd.DataFrame, nlp=None) -> pd.DataFrame:
     """Add clean_light, clean_deep, and word_count columns to `df`."""
     if nlp is None:
+        import spacy  # lazy: importing spaCy also imports torch (via thinc), which viewing results never needs
+
         nlp = spacy.load("en_core_web_sm")
 
     df = df.copy()

@@ -13,7 +13,6 @@ deprecated `google-generativeai` package.
 
 import hashlib
 import json
-import os
 import sys
 from pathlib import Path
 
@@ -22,6 +21,7 @@ from dotenv import load_dotenv
 sys.path.append(str(Path(__file__).resolve().parents[2]))
 
 from src.db import database as db
+from src.settings import get_setting
 from src.insights.ranking import (
     MIN_MENTIONS,
     describe_closeness,
@@ -47,11 +47,11 @@ RETRYABLE_STATUS_CODES = (429, 503)  # rate limited / model overloaded
 
 
 def primary_model() -> str:
-    return os.environ.get("GEMINI_MODEL") or DEFAULT_MODEL
+    return get_setting("GEMINI_MODEL") or DEFAULT_MODEL
 
 
 def fallback_model() -> str:
-    return os.environ.get("GEMINI_FALLBACK_MODEL") or DEFAULT_FALLBACK_MODEL
+    return get_setting("GEMINI_FALLBACK_MODEL") or DEFAULT_FALLBACK_MODEL
 
 
 SYSTEM_INSTRUCTION = """You are a marketing research analyst producing an executive brief from
@@ -125,11 +125,12 @@ def call_llm(system_instruction: str, user_prompt: str) -> tuple:
     Any other error, or a failure of the fallback, propagates to the caller.
     Swap providers (e.g. a local Ollama model) by editing only this function.
     """
-    api_key = os.environ.get("GEMINI_API_KEY")
+    api_key = get_setting("GEMINI_API_KEY")
     if not api_key:
         raise RuntimeError(
             "GEMINI_API_KEY is not set. Get a free key at https://aistudio.google.com/apikey "
-            "and add it to a .env file in the project root as GEMINI_API_KEY=your_key_here."
+            "and add it to a .env file in the project root as GEMINI_API_KEY=your_key_here "
+            "(or to Streamlit secrets when deployed)."
         )
 
     model = primary_model()

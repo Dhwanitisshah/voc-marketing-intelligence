@@ -58,6 +58,19 @@ def validate_mode(mode: str) -> str:
     return mode
 
 
+def mode_key(mode: str | None = None, split_clauses: bool | None = None) -> str:
+    """Identifier stored with a dataset: "review", "sentence" or "sentence+clause".
+
+    Datasets whose stored key differs from the current config's are rebuilt on load, so
+    flipping ASPECT_SPLIT_CLAUSES invalidates caches just as changing the mode does.
+    """
+    mode = validate_mode(mode or config.ASPECT_SENTIMENT_MODE)
+    if mode == "review":
+        return "review"
+    split = config.ASPECT_SPLIT_CLAUSES if split_clauses is None else split_clauses
+    return "sentence+clause" if split else "sentence"
+
+
 @dataclass
 class Mention:
     aspect: str
@@ -239,22 +252,32 @@ def compute_aspect_details(
     return details
 
 
-def rebuild_dataset_aspects(dataset_id: str, mode: str | None = None, progress_callback=None, scorer=None):
+def rebuild_dataset_aspects(
+    dataset_id: str,
+    mode: str | None = None,
+    progress_callback=None,
+    scorer=None,
+    split_clauses: bool | None = None,
+):
     """Recompute and store aspect-level sentiment for an already-analysed dataset.
 
     Uses the stored review text, review-level sentiment and aspect tags, so the full
-    pipeline (cleaning, review sentiment, topics) is not re-run. Returns the mode used.
+    pipeline (cleaning, review sentiment, topics) is not re-run. Returns the stored key
+    (see mode_key).
     """
     from src.db import database as db
 
     mode = validate_mode(mode or config.ASPECT_SENTIMENT_MODE)
     df = db.load_analysis(dataset_id)
     df = df.rename(columns={"review_text": config.REVIEW_TEXT_COL})
-    details = compute_aspect_details(df, mode, scorer=scorer, progress_callback=progress_callback)
+    details = compute_aspect_details(
+        df, mode, scorer=scorer, split_clauses=split_clauses, progress_callback=progress_callback
+    )
 
     rows = []
     for review_id, per_aspect in zip(df["id"], details):
         for aspect, d in per_aspect.items():
             rows.append((int(review_id), aspect, d["sentiment"], d["keyword"], d["sentence"], int(d["negated"])))
-    db.replace_review_aspects(dataset_id, rows, mode)
-    return mode
+    key = mode_key(mode, split_clauses)
+    db.replace_review_aspects(dataset_id, rows, key)
+    return key

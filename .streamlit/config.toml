@@ -1,0 +1,7 @@
+[server]
+headless = true
+fileWatcherType = "none"   # the project is run with --server.fileWatcherType none
+maxUploadSize = 20         # MB
+
+[browser]
+gatherUsageStats = false

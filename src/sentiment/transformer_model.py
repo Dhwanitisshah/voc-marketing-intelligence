@@ -10,7 +10,6 @@ NEGATIVE only, no neutral class) — swap MODEL_NAME below if needed.
 """
 
 from tqdm import tqdm
-from transformers import pipeline
 
 MODEL_NAME = "cardiffnlp/twitter-roberta-base-sentiment-latest"
 
@@ -30,6 +29,8 @@ _pipe = None
 def _get_pipeline():
     global _pipe
     if _pipe is None:
+        from transformers import pipeline  # imported lazily: torch is heavy and only needed to score
+
         _pipe = pipeline(
             "sentiment-analysis",
             model=MODEL_NAME,

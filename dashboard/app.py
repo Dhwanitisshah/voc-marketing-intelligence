@@ -30,7 +30,7 @@ from src.data.column_mapping import (
     guess_review_text_column,
 )
 from src.db import database as db
-from src.aspects.aspect_sentiment import rebuild_dataset_aspects
+from src.aspects.aspect_sentiment import mode_key, rebuild_dataset_aspects
 from src.insights.guards import check_analysis
 from src.insights.ranking import (
     MIN_MENTIONS,
@@ -40,13 +40,13 @@ from src.insights.ranking import (
 )
 from src.insights.trends import MIN_WEEK_REVIEWS, weekly_sentiment
 from src.preprocessing.clean_text import light_clean
-from src.sentiment.transformer_model import _get_pipeline as _load_transformer_pipeline
 from src.strategy.generate_strategy import (
     fallback_model,
     generate_strategy,
     is_strategy_stale,
     primary_model,
 )
+from src.settings import get_int_setting
 from src.strategy.validation import StrategyValidationError
 
 st.set_page_config(page_title="VOC Marketing Intelligence", layout="wide")
@@ -110,12 +110,14 @@ def render_strategy(strategy: dict):
 
 @st.cache_resource(show_spinner="Loading sentiment model (first run only)...")
 def load_models():
-    """Warm the transformer pipeline once per server process."""
-    return _load_transformer_pipeline()
+    """Warm the transformer pipeline once per server process (only when something needs scoring)."""
+    from src.sentiment.transformer_model import _get_pipeline
+
+    return _get_pipeline()
 
 
+db.ensure_demo_db()  # fresh deployment: seed from the committed demo database
 db.init_db()
-load_models()
 
 st.title("VOC marketing intelligence")
 st.caption("Sentiment and aspect-level analysis of customer reviews.")
@@ -141,6 +143,7 @@ with st.sidebar:
     if uploaded_file is not None:
         raw_df = pd.read_csv(uploaded_file)
         columns = list(raw_df.columns)
+        max_rows = get_int_setting("MAX_ANALYZE_ROWS", 0)  # set on small hosts; 0 = unlimited
 
         guessed_text = guess_review_text_column(raw_df)
         guessed_rating = guess_column(columns, RATING_KEYWORDS)
@@ -175,6 +178,12 @@ if uploaded_file is not None and analyze_clicked:
     if not text_col:
         st.error("Select a review text column to continue.")
         st.stop()
+    if max_rows and len(raw_df) > max_rows:
+        st.error(
+            f"This deployment analyses at most {max_rows:,} reviews per upload "
+            f"(your file has {len(raw_df):,}). Upload a sample, or run the app locally for larger files."
+        )
+        st.stop()
 
     rename_map = {text_col: config.REVIEW_TEXT_COL}
     if rating_col != "(none)":
@@ -188,6 +197,7 @@ if uploaded_file is not None and analyze_clicked:
     if db.dataset_exists(dataset_id):
         st.session_state["dataset_id"] = dataset_id
     else:
+        load_models()
         progress = st.progress(0.0, text="Starting analysis...")
         save_start, save_end = pipeline.STAGE_SPANS["Saving results"]
 
@@ -197,7 +207,7 @@ if uploaded_file is not None and analyze_clicked:
         try:
             enriched_df = pipeline.analyze(mapped_df, progress_callback=on_progress)
             db.save_analysis(
-                enriched_df, dataset_id, aspect_mode=config.ASPECT_SENTIMENT_MODE,
+                enriched_df, dataset_id, aspect_mode=mode_key(),
                 progress_callback=lambda done, total: on_progress(
                     save_start + (save_end - save_start) * done / total, "Saving results"
                 ),
@@ -216,20 +226,23 @@ elif selected_dataset != "-- select --":
     st.session_state["dataset_id"] = selected_dataset
 
 dataset_id = st.session_state.get("dataset_id")
+if not dataset_id and db.dataset_exists(config.DEFAULT_DATASET_ID):
+    dataset_id = st.session_state["dataset_id"] = config.DEFAULT_DATASET_ID  # open the demo straight away
 
 if not dataset_id:
     st.info("Upload a CSV or select a previously analyzed dataset from the sidebar to begin.")
     st.stop()
 
-if db.get_aspect_mode(dataset_id) != config.ASPECT_SENTIMENT_MODE:
+if db.get_aspect_mode(dataset_id) != mode_key():
     # Cached aspect sentiment was computed under a different mode: rebuild it from the
     # stored text (no need to re-run cleaning, review sentiment or topics).
+    load_models()
     rebuild_bar = st.progress(0.0, text="Rebuilding aspect sentiment...")
     rebuild_dataset_aspects(
         dataset_id,
         config.ASPECT_SENTIMENT_MODE,
         progress_callback=lambda fraction: rebuild_bar.progress(
-            min(fraction, 1.0), text=f"Rebuilding aspect sentiment ({config.ASPECT_SENTIMENT_MODE} mode)... {fraction:.0%}"
+            min(fraction, 1.0), text=f"Rebuilding aspect sentiment ({mode_key()})... {fraction:.0%}"
         ),
     )
     rebuild_bar.empty()
@@ -237,7 +250,7 @@ if db.get_aspect_mode(dataset_id) != config.ASPECT_SENTIMENT_MODE:
 df = db.load_analysis(dataset_id)
 st.caption(
     f"Dataset: `{dataset_id}` · {len(df)} reviews · "
-    f"aspect sentiment: {db.get_aspect_mode(dataset_id)}-level"
+    f"aspect sentiment: {db.get_aspect_mode(dataset_id)}"
 )
 for guard_warning in check_analysis(df):
     st.warning(guard_warning, icon=":material/warning:")

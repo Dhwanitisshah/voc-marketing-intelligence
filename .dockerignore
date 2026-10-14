@@ -1,0 +1,13 @@
+.git
+.venv
+.env
+.streamlit/secrets.toml
+__pycache__
+*.pyc
+.pytest_cache
+data/voc.db
+data/raw
+data/processed
+notebooks
+docs/*.png
+docs/*.jpeg

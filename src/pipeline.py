@@ -10,13 +10,11 @@ import sys
 from pathlib import Path
 
 import pandas as pd
-import spacy
 
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 
 import config
 from src.preprocessing.clean_text import preprocess
-from src.sentiment.transformer_model import score_transformer
 from src.aspects.aspect_sentiment import compute_aspect_details
 from src.aspects.aspect_tagger import tag_dataframe
 
@@ -26,6 +24,8 @@ _nlp = None
 def _get_nlp():
     global _nlp
     if _nlp is None:
+        import spacy  # lazy: see clean_text.preprocess
+
         _nlp = spacy.load("en_core_web_sm")
     return _nlp
 
@@ -67,6 +67,8 @@ def analyze(df: pd.DataFrame, progress_callback=None) -> pd.DataFrame:
     df = preprocess(df, nlp=_get_nlp())
 
     report("Scoring sentiment")
+    from src.sentiment.transformer_model import score_transformer  # lazy: keeps `import pipeline` light
+
     results = score_transformer(
         df["clean_light"].tolist(),
         progress_callback=lambda done, total: report("Scoring sentiment", done / total if total else 1.0),

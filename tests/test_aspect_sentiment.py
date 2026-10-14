@@ -140,7 +140,7 @@ def test_reviews_without_aspects_are_never_scored(sentence_nlp):
 
 def test_clause_splitting_scores_only_the_keyword_clause(sentence_nlp):
     text = "The sound is terrible but it was easy to set up."
-    whole = _ux(text, sentence_nlp, scorer=fake_scorer_factory())  # "terrible" drags the sentence negative
+    whole = _ux(text, sentence_nlp, scorer=fake_scorer_factory(), split_clauses=False)  # "terrible" drags the sentence negative
     calls = []
     clause = _ux(text, sentence_nlp, scorer=fake_scorer_factory(calls), split_clauses=True)
 
@@ -241,7 +241,7 @@ def test_rebuild_switches_mode_and_changes_aspect_counts(tmp_db, sentence_nlp):
     before = db.aspect_sentiment_summary("ds1").iloc[0]
     assert (before["positive"], before["negative"]) == (1, 1)  # review-level: one of each
 
-    mode = A.rebuild_dataset_aspects("ds1", "sentence", scorer=fake_scorer_factory())
+    mode = A.rebuild_dataset_aspects("ds1", "sentence", scorer=fake_scorer_factory(), split_clauses=False)
 
     assert mode == "sentence" and db.get_aspect_mode("ds1") == "sentence"
     after = db.aspect_sentiment_summary("ds1").iloc[0]
@@ -368,3 +368,36 @@ def test_first_connection_migrates_an_old_database_without_init_db(tmp_path, mon
 
     assert db.get_aspect_mode("ds1") == "review"                      # dataset_meta did not exist
     assert db.negative_examples_for_aspect("ds1", "ux") == ["Slow app."]  # ra.sentence did not exist
+
+
+def test_clause_splitting_is_on_by_default():
+    assert config.ASPECT_SPLIT_CLAUSES is True
+    assert A.mode_key() == "sentence+clause"
+
+
+@pytest.mark.parametrize(
+    "mode, split, expected",
+    [("review", True, "review"), ("review", False, "review"), ("sentence", False, "sentence"), ("sentence", True, "sentence+clause")],
+)
+def test_mode_key_combinations(mode, split, expected):
+    assert A.mode_key(mode, split) == expected
+
+
+def test_default_config_gives_clause_split_without_an_explicit_flag(sentence_nlp):
+    calls = []
+
+    d = _ux("The sound is terrible but it was easy to set up.", sentence_nlp, scorer=fake_scorer_factory(calls))
+
+    assert calls == [["but it was easy to set up."]] and d["sentiment"] == "positive"
+
+
+def test_changing_only_the_clause_flag_makes_a_cached_dataset_stale(tmp_db, sentence_nlp, monkeypatch):
+    _seed_review_mode(tmp_db)
+    A.rebuild_dataset_aspects("ds1", "sentence", scorer=fake_scorer_factory(), split_clauses=False)
+    assert db.get_aspect_mode("ds1") == "sentence"
+
+    # the app compares the stored key with mode_key(): with clauses now on, they differ -> rebuild
+    assert db.get_aspect_mode("ds1") != A.mode_key()
+
+    A.rebuild_dataset_aspects("ds1", "sentence", scorer=fake_scorer_factory())  # config default: clauses on
+    assert db.get_aspect_mode("ds1") == A.mode_key() == "sentence+clause"

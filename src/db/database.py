@@ -11,6 +11,8 @@ Python on every query).
 """
 
 import json
+import os
+import shutil
 import sqlite3
 import sys
 from datetime import datetime, timezone
@@ -22,10 +24,24 @@ sys.path.append(str(Path(__file__).resolve().parents[2]))
 
 import config
 
-DB_PATH = config.PROJECT_ROOT / "data" / "voc.db"
+# VOC_DB_PATH lets a hosted deployment keep the (writable) database somewhere else.
+DB_PATH = Path(os.environ.get("VOC_DB_PATH") or config.PROJECT_ROOT / "data" / "voc.db")
 
 
 _schema_ready = set()
+
+
+def ensure_demo_db() -> bool:
+    """On a fresh install (no database yet) seed it from the committed demo database.
+
+    Returns True if the demo database was copied. The copy is a normal, writable database, so
+    uploads and strategy generation work on top of it.
+    """
+    if DB_PATH.exists() or not config.DEMO_DB_PATH.exists():
+        return False
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(config.DEMO_DB_PATH, DB_PATH)
+    return True
 
 
 def _connect():

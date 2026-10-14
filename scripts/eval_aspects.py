@@ -11,7 +11,8 @@ genuine complaints found, and the aspect's impact rank among all six aspects.
 Labels come from data/eval/aspect_audit.csv: `human_label` where filled, otherwise
 `draft_label`. Negative mentions with no label are reported, never silently dropped;
 `--append-unlabelled` adds them to the CSV (found_in = the mode that flagged them) so they
-can be labelled.
+can be labelled, and refreshes the `neg_<mode>` columns recording which modes count each row
+as negative (scripts/eval_agreement.py reads those, so it needs no model).
 
 Usage:
     python scripts/eval_aspects.py [--dataset ID] [--labels CSV] [--out docs/aspect_eval.md]
@@ -31,6 +32,7 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from src.aspects.aspect_lexicon import ASPECT_KEYWORDS
 from src.aspects.aspect_sentiment import compute_aspect_details
+from src.evaluation.agreement import flag_column
 from src.db import database as db
 from src.insights.ranking import describe_closeness, rank_complaints
 
@@ -137,9 +139,10 @@ def unlabelled(results, labels, variant):
     return out
 
 
-def append_unlabelled(path: Path, rows, new, df_by_id):
+def append_unlabelled(path: Path, rows, new, df_by_id, results):
     fieldnames = list(rows[0].keys())
-    for col in EXTRA_COLUMNS:
+    flag_cols = [flag_column(name) for name, _ in VARIANTS]
+    for col in EXTRA_COLUMNS + flag_cols:
         if col not in fieldnames:
             fieldnames.append(col)
     for r in rows:
@@ -158,6 +161,9 @@ def append_unlabelled(path: Path, rows, new, df_by_id):
         )
         rows.append(row)
         seen[key] = row
+    for r in rows:  # which modes count this mention as negative (a snapshot of this run)
+        for name, _ in VARIANTS:
+            r[flag_column(name)] = int(int(r["review_id"]) in results[name]["negatives"][r["aspect"]])
     with open(path, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=fieldnames)
         w.writeheader()
@@ -188,8 +194,8 @@ def main():
         counts = Counter((a, name) for a, _, _, name in new)
         print("Unlabelled negative mentions by (aspect, variant):", dict(counts))
         if args.append_unlabelled:
-            append_unlabelled(args.labels, rows, new, by_id)
-            print(f"Appended to {args.labels}")
+            append_unlabelled(args.labels, rows, new, by_id, results)
+            print(f"Updated {args.labels}: appended unlabelled mentions and refreshed neg_<mode> flags")
         return
 
     sources = Counter(src for _, src in labels.values())
