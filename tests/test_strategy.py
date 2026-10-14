@@ -4,6 +4,7 @@ import pytest
 
 from src.db import database as db
 from src.strategy import generate_strategy as strategy_mod
+from src.strategy import validation
 
 
 def _seed(tmp_db, enriched_df, dataset_id="ds1"):
@@ -46,16 +47,17 @@ def test_generate_strategy_parses_mocked_json(tmp_db, enriched_df, mock_llm):
 
 def test_strip_json_fences_handles_fenced_response():
     fenced = "```json\n" + json.dumps({"a": 1}) + "\n```"
-    assert strategy_mod._strip_json_fences(fenced) == json.dumps({"a": 1})
+    assert validation._strip_json_fences(fenced) == json.dumps({"a": 1})
 
 
-def test_generate_strategy_falls_back_to_raw_on_invalid_json(tmp_db, enriched_df, monkeypatch):
+def test_generate_strategy_raises_clear_error_on_invalid_json(tmp_db, enriched_df, monkeypatch):
     dataset_id = _seed(tmp_db, enriched_df)
-    monkeypatch.setattr(strategy_mod, "call_llm", lambda system_instruction, user_prompt: "not json at all")
+    monkeypatch.setattr(
+        strategy_mod, "call_llm", lambda system_instruction, user_prompt: ("not json at all", "m")
+    )
 
-    result = strategy_mod.generate_strategy(dataset_id)
-
-    assert result == {"raw": "not json at all"}
+    with pytest.raises(strategy_mod.StrategyValidationError, match="expected strategy format"):
+        strategy_mod.generate_strategy(dataset_id)
 
 
 def test_call_llm_raises_clear_error_when_api_key_missing(monkeypatch):

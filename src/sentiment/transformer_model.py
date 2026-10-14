@@ -41,11 +41,12 @@ def _get_pipeline():
     return _pipe
 
 
-def score_transformer(texts, batch_size=32):
+def score_transformer(texts, batch_size=32, progress_callback=None):
     """Score a list of texts with the transformer model.
 
     Returns a list of (label, confidence) tuples. Loads the model once and
-    scores in batches via the HuggingFace pipeline for efficiency.
+    scores in batches via the HuggingFace pipeline for efficiency. If given,
+    `progress_callback(done, total)` is called after each batch.
     """
     texts = [text if isinstance(text, str) and text.strip() else "" for text in texts]
     pipe = _get_pipeline()
@@ -57,4 +58,6 @@ def score_transformer(texts, batch_size=32):
         for out in outputs:
             label = _LABEL_MAP.get(out["label"].lower(), out["label"].lower())
             results.append((label, float(out["score"])))
+        if progress_callback:
+            progress_callback(len(results), len(texts))
     return results

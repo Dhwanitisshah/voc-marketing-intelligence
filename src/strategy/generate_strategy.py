@@ -11,17 +11,23 @@ Uses the free-tier Gemini API via the new unified `google-genai` SDK
 deprecated `google-generativeai` package.
 """
 
+import hashlib
 import json
+import os
 import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
-import os
 
 sys.path.append(str(Path(__file__).resolve().parents[2]))
 
 from src.db import database as db
 from src.insights.ranking import MIN_MENTIONS, negative_heavy_topics, rank_complaints
+from src.strategy.validation import (
+    StrategyValidationError,
+    check_grounding,
+    parse_strategy,
+)
 
 load_dotenv()
 
@@ -29,9 +35,19 @@ load_dotenv()
 # current default Flash model; confirm the exact current free model ID in
 # Google AI Studio's model list (https://aistudio.google.com/) as offerings
 # change — pinned versions (e.g. gemini-2.5-flash) can be retired for new API
-# keys. "gemini-flash-lite-latest" is an even lighter/cheaper free option if
-# flash is rate-limited or too slow.
-MODEL_NAME = "gemini-flash-latest"
+# keys. Override with GEMINI_MODEL / GEMINI_FALLBACK_MODEL in .env.
+DEFAULT_MODEL = "gemini-flash-latest"
+DEFAULT_FALLBACK_MODEL = "gemini-flash-lite-latest"
+RETRYABLE_STATUS_CODES = (429, 503)  # rate limited / model overloaded
+
+
+def primary_model() -> str:
+    return os.environ.get("GEMINI_MODEL") or DEFAULT_MODEL
+
+
+def fallback_model() -> str:
+    return os.environ.get("GEMINI_FALLBACK_MODEL") or DEFAULT_FALLBACK_MODEL
+
 
 SYSTEM_INSTRUCTION = """You are a marketing research analyst producing an executive brief from
 customer review analytics. You will be given aggregate sentiment counts, per-aspect sentiment
@@ -50,6 +66,9 @@ Rules:
 - "negative_heavy_topics" are themes discovered from the reviews that no keyword lexicon defined.
   They carry aggregates only. Use them to point at complaint themes the aspect list misses, but do not
   invent review content for them beyond their keywords and counts.
+- Order "recommendations" to follow top_complaint_aspects (highest impact first); recommendations
+  about negative_heavy_topics come after the aspect-based ones.
+- Only use numbers that appear in the data (or simple percentages computed from its counts).
 - Respond with clean JSON only, matching the requested schema exactly."""
 
 JSON_SCHEMA_HINT = """Respond with JSON matching exactly this schema:
@@ -66,21 +85,18 @@ JSON_SCHEMA_HINT = """Respond with JSON matching exactly this schema:
 }"""
 
 
-def call_llm(system_instruction: str, user_prompt: str) -> str:
-    """Isolated LLM call. Swap providers (e.g. a local Ollama model) by editing only this function."""
+def _status_code(exc: Exception):
+    """HTTP status carried by a google-genai APIError (`code`), if any."""
+    return getattr(exc, "code", None) or getattr(exc, "status_code", None)
+
+
+def _generate(model: str, system_instruction: str, user_prompt: str, api_key: str) -> str:
     from google import genai
     from google.genai import types
 
-    api_key = os.environ.get("GEMINI_API_KEY")
-    if not api_key:
-        raise RuntimeError(
-            "GEMINI_API_KEY is not set. Get a free key at https://aistudio.google.com/apikey "
-            "and add it to a .env file in the project root as GEMINI_API_KEY=your_key_here."
-        )
-
     client = genai.Client(api_key=api_key)
     response = client.models.generate_content(
-        model=MODEL_NAME,
+        model=model,
         contents=user_prompt,
         config=types.GenerateContentConfig(
             system_instruction=system_instruction,
@@ -89,6 +105,30 @@ def call_llm(system_instruction: str, user_prompt: str) -> str:
         ),
     )
     return response.text
+
+
+def call_llm(system_instruction: str, user_prompt: str) -> tuple:
+    """Isolated LLM call. Returns (response_text, model_used).
+
+    Tries the primary model; on a 429/503 retries once on the fallback model.
+    Any other error, or a failure of the fallback, propagates to the caller.
+    Swap providers (e.g. a local Ollama model) by editing only this function.
+    """
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        raise RuntimeError(
+            "GEMINI_API_KEY is not set. Get a free key at https://aistudio.google.com/apikey "
+            "and add it to a .env file in the project root as GEMINI_API_KEY=your_key_here."
+        )
+
+    model = primary_model()
+    try:
+        return _generate(model, system_instruction, user_prompt, api_key), model
+    except Exception as exc:
+        fallback = fallback_model()
+        if _status_code(exc) not in RETRYABLE_STATUS_CODES or fallback == model:
+            raise
+        return _generate(fallback, system_instruction, user_prompt, api_key), fallback
 
 
 def build_context(dataset_id: str, max_aspects: int = 3, examples_per_aspect: int = 3) -> dict:
@@ -162,19 +202,34 @@ def _negative_topic_aggregates(dataset_id: str, counts: dict, total: int, limit:
     ]
 
 
-def _strip_json_fences(text: str) -> str:
-    text = text.strip()
-    if text.startswith("```"):
-        lines = text.splitlines()
-        if lines[0].startswith("```"):
-            lines = lines[1:]
-        if lines and lines[-1].strip().startswith("```"):
-            lines = lines[:-1]
-        text = "\n".join(lines).strip()
-    return text
+def hash_context(context: dict) -> str:
+    """Stable fingerprint of the exact context handed to the model."""
+    canonical = json.dumps(context, sort_keys=True, default=str)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def is_strategy_stale(dataset_id: str, record: dict | None = None) -> bool | None:
+    """Has the data behind a cached strategy changed since it was generated?
+
+    None if no strategy exists. True if the context hash differs, or if the
+    strategy predates hash tracking (so freshness can't be confirmed).
+    """
+    record = record or db.load_strategy_record(dataset_id)
+    if record is None:
+        return None
+    if not record["context_hash"]:
+        return True
+    return record["context_hash"] != hash_context(build_context(dataset_id))
 
 
 def generate_strategy(dataset_id: str) -> dict:
+    """Generate a validated strategy.
+
+    Returns the Strategy fields plus "model" (which model answered),
+    "context_hash" (see is_strategy_stale) and "grounding" (see
+    validation.check_grounding). Raises StrategyValidationError if the model
+    returns an invalid response twice.
+    """
     context = build_context(dataset_id)
 
     user_prompt = (
@@ -183,14 +238,21 @@ def generate_strategy(dataset_id: str) -> dict:
         f"{JSON_SCHEMA_HINT}"
     )
 
-    raw_text = call_llm(SYSTEM_INSTRUCTION, user_prompt)
-
-    cleaned = _strip_json_fences(raw_text)
+    raw_text, model = call_llm(SYSTEM_INSTRUCTION, user_prompt)
     try:
-        result = json.loads(cleaned)
-    except json.JSONDecodeError:
-        return {"raw": raw_text}
+        parsed = parse_strategy(raw_text)
+    except StrategyValidationError as first_error:
+        retry_prompt = (
+            f"{user_prompt}\n\nYour previous response was rejected: {first_error} "
+            "Respond again with ONLY valid JSON matching the schema exactly."
+        )
+        raw_text, model = call_llm(SYSTEM_INSTRUCTION, retry_prompt)
+        parsed = parse_strategy(raw_text)  # a second failure surfaces as the error
 
+    result = parsed.model_dump()
+    result["model"] = model
+    result["context_hash"] = hash_context(context)
+    result["grounding"] = check_grounding(result, context)
     return result
 
 

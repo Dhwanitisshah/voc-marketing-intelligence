@@ -25,3 +25,4 @@ plotly
 # --- Phase 5: LLM marketing strategy layer ---
 google-genai
 python-dotenv
+pydantic

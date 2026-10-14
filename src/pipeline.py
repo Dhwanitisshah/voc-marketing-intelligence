@@ -29,25 +29,50 @@ def _get_nlp():
     return _nlp
 
 
-def analyze(df: pd.DataFrame) -> pd.DataFrame:
+# Share of the overall progress bar each stage owns: (start, end) fractions.
+STAGE_SPANS = {
+    "Cleaning text": (0.0, 0.10),
+    "Scoring sentiment": (0.10, 0.85),
+    "Tagging aspects": (0.85, 0.90),
+    "Saving results": (0.90, 1.0),
+}
+
+
+def analyze(df: pd.DataFrame, progress_callback=None) -> pd.DataFrame:
     """Run the full clean -> sentiment -> aspect chain over a raw reviews df.
 
     `df` must contain config.REVIEW_TEXT_COL. Returns a new df with
     clean_light, clean_deep, sentiment, confidence, aspects, and
     aspect_<name> boolean columns added.
+
+    `progress_callback(fraction, stage)`, if given, is called with the overall
+    progress in [0, 1] and the current stage name from STAGE_SPANS (the caller
+    owns the final "Saving results" stage, which happens after analyze()).
     """
+    def report(stage, done=0.0):
+        if progress_callback:
+            start, end = STAGE_SPANS[stage]
+            progress_callback(start + (end - start) * done, stage)
+
     if config.REVIEW_TEXT_COL not in df.columns:
         raise KeyError(
             f"Expected review text column '{config.REVIEW_TEXT_COL}' not found. "
             f"Columns found: {list(df.columns)}"
         )
 
+    report("Cleaning text")
     df = preprocess(df, nlp=_get_nlp())
 
-    results = score_transformer(df["clean_light"].tolist())
+    report("Scoring sentiment")
+    results = score_transformer(
+        df["clean_light"].tolist(),
+        progress_callback=lambda done, total: report("Scoring sentiment", done / total if total else 1.0),
+    )
     df["sentiment"] = [label for label, _ in results]
     df["confidence"] = [score for _, score in results]
 
+    report("Tagging aspects")
     df = tag_dataframe(df)
+    report("Tagging aspects", 1.0)
 
     return df

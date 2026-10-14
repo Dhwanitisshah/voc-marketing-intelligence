@@ -73,10 +73,17 @@ def init_db():
             CREATE TABLE IF NOT EXISTS strategy (
                 dataset_id TEXT PRIMARY KEY,
                 strategy_json TEXT,
-                created_at TEXT
+                created_at TEXT,
+                context_hash TEXT,
+                model TEXT
             )
             """
         )
+        # Databases created before staleness tracking lack these columns.
+        existing = {r[1] for r in conn.execute("PRAGMA table_info(strategy)")}
+        for column in ("context_hash", "model"):
+            if column not in existing:
+                conn.execute(f"ALTER TABLE strategy ADD COLUMN {column} TEXT")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS topics (
@@ -121,43 +128,72 @@ def dataset_exists(dataset_id: str) -> bool:
         conn.close()
 
 
-def save_analysis(df: pd.DataFrame, dataset_id: str):
-    """Write an enriched (post-pipeline.analyze) dataframe under `dataset_id`."""
-    rating_col = config.RATING_COL if config.RATING_COL in df.columns else None
-    date_col = config.DATE_COL if config.DATE_COL in df.columns else None
+SAVE_BATCH_SIZE = 1000
+
+
+def _none_if_missing(series: pd.Series) -> list:
+    """Column -> list of Python natives with NaN/NaT/None mapped to None (NULL)."""
+    return series.astype(object).where(series.notna(), None).tolist()
+
+
+def save_analysis(df: pd.DataFrame, dataset_id: str, progress_callback=None):
+    """Write an enriched (post-pipeline.analyze) dataframe under `dataset_id`.
+
+    Rows are inserted in batches with executemany. review ids are assigned up
+    front (inside one write transaction) so review_aspects rows can reference
+    them without a lastrowid round-trip per review. `progress_callback`, if
+    given, is called as progress_callback(rows_saved, total_rows) after each batch.
+    """
+    n = len(df)
+    texts = _none_if_missing(df[config.REVIEW_TEXT_COL])
+    clean = _none_if_missing(df["clean_deep"]) if "clean_deep" in df.columns else [""] * n
+    sentiments = df["sentiment"].tolist()
+    confidences = [float(c) for c in df["confidence"]]
+    aspect_lists = [a if isinstance(a, list) else [] for a in df["aspects"]]
+    ratings = (
+        _none_if_missing(df[config.RATING_COL]) if config.RATING_COL in df.columns else [None] * n
+    )
+    dates = (
+        [None if d is None else str(d) for d in _none_if_missing(df[config.DATE_COL])]
+        if config.DATE_COL in df.columns
+        else [None] * n
+    )
 
     conn = _connect()
     try:
-        cur = conn.cursor()
-        for _, row in df.iterrows():
-            aspects = row["aspects"] if isinstance(row["aspects"], list) else []
-            cur.execute(
+        conn.execute("BEGIN IMMEDIATE")
+        start_id = conn.execute("SELECT COALESCE(MAX(id), 0) FROM analyzed_reviews").fetchone()[0] + 1
+
+        for lo in range(0, n, SAVE_BATCH_SIZE):
+            hi = min(lo + SAVE_BATCH_SIZE, n)
+            conn.executemany(
                 """
                 INSERT INTO analyzed_reviews
-                    (dataset_id, review_text, clean_deep, sentiment, confidence, aspects, rating, review_date)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    (id, dataset_id, review_text, clean_deep, sentiment, confidence, aspects, rating, review_date)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (
-                    dataset_id,
-                    row[config.REVIEW_TEXT_COL],
-                    row.get("clean_deep", ""),
-                    row["sentiment"],
-                    float(row["confidence"]),
-                    ",".join(aspects),
-                    row[rating_col] if rating_col else None,
-                    str(row[date_col]) if date_col else None,
-                ),
+                [
+                    (
+                        start_id + i, dataset_id, texts[i], clean[i], sentiments[i],
+                        confidences[i], ",".join(aspect_lists[i]), ratings[i], dates[i],
+                    )
+                    for i in range(lo, hi)
+                ],
             )
-            review_id = cur.lastrowid
-            for aspect in aspects:
-                cur.execute(
-                    """
-                    INSERT INTO review_aspects (dataset_id, review_id, aspect, sentiment)
-                    VALUES (?, ?, ?, ?)
-                    """,
-                    (dataset_id, review_id, aspect, row["sentiment"]),
-                )
+            conn.executemany(
+                "INSERT INTO review_aspects (dataset_id, review_id, aspect, sentiment) VALUES (?, ?, ?, ?)",
+                [
+                    (dataset_id, start_id + i, aspect, sentiments[i])
+                    for i in range(lo, hi)
+                    for aspect in aspect_lists[i]
+                ],
+            )
+            if progress_callback:
+                progress_callback(hi, n)
         conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 
@@ -247,33 +283,59 @@ def negative_examples_for_aspect(dataset_id: str, aspect: str, limit: int = 3) -
 
 
 def save_strategy(dataset_id: str, strategy_dict: dict):
+    """Cache a strategy. `context_hash` / `model` keys in the dict (set by
+    generate_strategy) are also stored in their own columns for staleness checks."""
     conn = _connect()
     try:
         conn.execute(
             """
-            INSERT INTO strategy (dataset_id, strategy_json, created_at)
-            VALUES (?, ?, ?)
+            INSERT INTO strategy (dataset_id, strategy_json, created_at, context_hash, model)
+            VALUES (?, ?, ?, ?, ?)
             ON CONFLICT(dataset_id) DO UPDATE SET
                 strategy_json = excluded.strategy_json,
-                created_at = excluded.created_at
+                created_at = excluded.created_at,
+                context_hash = excluded.context_hash,
+                model = excluded.model
             """,
-            (dataset_id, json.dumps(strategy_dict), datetime.now(timezone.utc).isoformat()),
+            (
+                dataset_id,
+                json.dumps(strategy_dict),
+                datetime.now(timezone.utc).isoformat(),
+                strategy_dict.get("context_hash"),
+                strategy_dict.get("model"),
+            ),
         )
         conn.commit()
     finally:
         conn.close()
 
 
-def load_strategy(dataset_id: str) -> dict | None:
+def load_strategy_record(dataset_id: str) -> dict | None:
+    """{"strategy", "context_hash", "model", "created_at"} or None if never generated.
+
+    context_hash is None for strategies saved before staleness tracking existed.
+    """
     conn = _connect()
     try:
         row = conn.execute(
-            "SELECT strategy_json FROM strategy WHERE dataset_id = ?",
+            "SELECT strategy_json, context_hash, model, created_at FROM strategy WHERE dataset_id = ?",
             (dataset_id,),
         ).fetchone()
-        return json.loads(row[0]) if row else None
+        if not row:
+            return None
+        return {
+            "strategy": json.loads(row[0]),
+            "context_hash": row[1],
+            "model": row[2],
+            "created_at": row[3],
+        }
     finally:
         conn.close()
+
+
+def load_strategy(dataset_id: str) -> dict | None:
+    record = load_strategy_record(dataset_id)
+    return record["strategy"] if record else None
 
 
 # --- Discovered topics (BERTopic cache) -------------------------------------

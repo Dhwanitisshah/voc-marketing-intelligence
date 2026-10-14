@@ -18,7 +18,7 @@ Businesses sit on tens of thousands of reviews and read almost none of them. Sta
 - **Aspect mining** — tags what customers discuss (delivery, price, quality, support, packaging, UX) and crosses it with sentiment to surface top complaints and top praise.
 - **Topic discovery** — BERTopic surfaces themes no one hard-coded, exposing what a fixed lexicon misses. Run it from the dashboard's *Discovered Topics* tab (on demand, cached in SQLite per dataset): top topics by size, per-topic sentiment split and example reviews, and a coverage comparison of the 6-aspect lexicon vs discovered topics.
 - **Interactive dashboard** — Streamlit app with sentiment breakdowns, aspect×sentiment charts, word clouds, a sentiment-over-time view, and a filterable review table. Top complaints are ranked by **impact** (negative mentions, not negative share), with aspects under 30 mentions flagged low-confidence; the time view is weekly (% negative and net sentiment).
-- **AI strategy layer** — an LLM (Google Gemini) reads the computed aggregates (including the most negative-heavy discovered topics) and writes an executive summary plus prioritized, **grounded** recommendations — every claim tied to a real number, no fabrication.
+- **AI strategy layer** — an LLM (Google Gemini) reads the computed aggregates (including the most negative-heavy discovered topics) and writes an executive summary plus prioritized, **grounded** recommendations — every claim tied to a real number, no fabrication. The response is schema-validated (pydantic, one corrective retry), every figure in it is checked against the data sent to the model, the panel shows which model answered (set `GEMINI_MODEL`; a 429/503 retries once on `gemini-flash-lite-latest`), and a cached strategy is flagged out of date when the underlying data changes.
 
 ## Key results
 
@@ -55,8 +55,9 @@ voc-marketing-intelligence/
 │   ├── strategy/             # Gemini grounded recommendations
 │   └── pipeline.py           # composed analyze() for the dashboard
 ├── src/insights/             # impact-based complaint ranking, weekly trends
+├── scripts/audit_aspect.py   # eyeball audit of keyword-tagged aspect mentions
 ├── dashboard/app.py          # Streamlit app
-├── tests/                    # 53-test pytest suite
+├── tests/                    # 91-test pytest suite
 └── reports/                  # generated results artifacts
 ```
 
@@ -99,7 +100,7 @@ python src/aspects/run_aspects.py         # keyword tags + BERTopic + aspect sum
 
 ```bash
 pytest -m "not slow" -v     # fast suite (~25s)
-pytest -v                   # full suite (53 tests)
+pytest -v                   # full suite (91 tests)
 ```
 
 The suite runs against an isolated temporary database and a mocked LLM — no live API calls, no pollution of your real data.

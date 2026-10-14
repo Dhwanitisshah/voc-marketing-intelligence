@@ -102,7 +102,7 @@ def mock_llm(monkeypatch):
     import src.strategy.generate_strategy as strategy_mod
 
     def _fake_call_llm(system_instruction, user_prompt):
-        return CANNED_STRATEGY_JSON
+        return CANNED_STRATEGY_JSON, "mock-model"
 
     monkeypatch.setattr(strategy_mod, "call_llm", _fake_call_llm)
     return CANNED_STRATEGY_JSON
